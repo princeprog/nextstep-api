@@ -67,7 +67,10 @@ class DemoWorkspaceTest extends IntegrationTestSupport {
 
         clock.set(start.plus(Duration.ofHours(24)).minusSeconds(1));
         assertThat(demo.get("/api/v1/dashboard").status()).isEqualTo(200);
-        assertThat(demoService.cleanupExpired()).as("not yet expired").isZero();
+        // Demos started by earlier tests may already be expired at this clock, so only this demo's survival is checked.
+        demoService.cleanupExpired();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM accounts WHERE id = CAST(? AS uuid)", Integer.class, demoId))
+                .as("not yet expired").isOne();
 
         clock.set(start.plus(Duration.ofHours(24)));
         Response expired = demo.get("/api/v1/applications");

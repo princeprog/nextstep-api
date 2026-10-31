@@ -54,7 +54,7 @@ public class ApplicationService {
         }
         if (!owner.isDemo() && applications.countByOwnerId(owner.id()) >= properties.getAccounts().getMaxApplications()) {
             throw ApiException.conflict("ACCOUNT_LIMIT_REACHED", "This account has reached its limit of "
-                    + properties.getAccounts().getMaxApplications() + " applications. Delete some to add more.");
+                    + properties.getAccounts().getMaxApplications() + " applications, including archived ones.");
         }
         ZoneId zone = ownerZone(owner);
         Application application = new Application();

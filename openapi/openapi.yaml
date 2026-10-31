@@ -1,0 +1,771 @@
+openapi: 3.1.0
+info:
+  title: NextStep API
+  version: 1.0.0
+  description: |
+    Private job-search workspace API for the NextStep portfolio MVP.
+    The browser calls it on the same origin under /api/v1. Authentication is an HttpOnly session cookie
+    (NEXTSTEP_SESSION); every unsafe request needs the CSRF header returned by GET /auth/csrf.
+    Owner identity always comes from the session. Records owned by someone else respond with 404.
+    Dates are YYYY-MM-DD, local times HH:mm, instants ISO-8601 UTC, and money amounts decimal strings.
+servers:
+  - url: /api/v1
+tags:
+  - name: Auth
+  - name: Profile
+  - name: Applications
+  - name: Tasks
+  - name: Interviews
+  - name: Dashboard
+paths:
+  /auth/csrf:
+    get:
+      tags: [Auth]
+      summary: Get the CSRF header name and token for the current session
+      security: []
+      responses:
+        '200':
+          description: Token for the X-CSRF-TOKEN header. Fetch again after sign-in, sign-out, or demo entry.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CsrfToken' }
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Create a normal account and sign in
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/Me' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Sign in with email and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Me' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /auth/demo:
+    post:
+      tags: [Auth]
+      summary: Start an isolated, temporary demo workspace with fictional data
+      security: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DemoRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/Me' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: End the current session
+      responses:
+        '204': { description: Signed out }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /me:
+    get:
+      tags: [Profile]
+      summary: Current account
+      responses:
+        '200': { $ref: '#/components/responses/Me' }
+        '401': { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [Profile]
+      summary: Update display name or time zone (affects new tasks and interviews only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProfilePatch' }
+      responses:
+        '200': { $ref: '#/components/responses/Me' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Profile]
+      summary: Permanently delete a normal account, its data, and all sessions
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /applications:
+    get:
+      tags: [Applications]
+      summary: Search, filter, sort, and page owned applications
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { name: search, in: query, schema: { type: string }, description: Case-insensitive match on company, job title, contact name, and contact email }
+        - { name: status, in: query, schema: { type: array, items: { $ref: '#/components/schemas/ApplicationStatus' } }, explode: true }
+        - { name: workArrangement, in: query, schema: { $ref: '#/components/schemas/WorkArrangement' } }
+        - { name: employmentType, in: query, schema: { $ref: '#/components/schemas/EmploymentType' } }
+        - { name: location, in: query, schema: { type: string }, description: Case-insensitive substring }
+        - { name: appliedFrom, in: query, schema: { type: string, format: date }, description: Inclusive }
+        - { name: appliedTo, in: query, schema: { type: string, format: date }, description: Inclusive }
+        - { name: archive, in: query, schema: { type: string, enum: [active, archived], default: active } }
+        - { name: sort, in: query, schema: { type: string, enum: [updatedAt, company, appliedDate, nextTaskDue], default: updatedAt } }
+        - { name: direction, in: query, schema: { type: string, enum: [asc, desc] }, description: Defaults to desc for updatedAt and appliedDate, asc otherwise. Missing values sort last. }
+      responses:
+        '200':
+          description: One page of applications
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApplicationPage' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+    post:
+      tags: [Applications]
+      summary: Create an application (status defaults to SAVED)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApplicationCreate' }
+      responses:
+        '201': { $ref: '#/components/responses/Application' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /applications/duplicates:
+    get:
+      tags: [Applications]
+      summary: Count owned applications with the same company and job title (advisory only)
+      parameters:
+        - { name: company, in: query, schema: { type: string } }
+        - { name: jobTitle, in: query, schema: { type: string } }
+        - { name: excludeId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Duplicate count
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [count]
+                properties:
+                  count: { type: integer }
+        '401': { $ref: '#/components/responses/Error' }
+  /applications/{id}:
+    parameters:
+      - { $ref: '#/components/parameters/Id' }
+    get:
+      tags: [Applications]
+      summary: Get an owned application, including archived ones
+      responses:
+        '200': { $ref: '#/components/responses/Application' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [Applications]
+      summary: Partially update fields other than status; explicit null clears an optional field
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApplicationPatch' }
+      responses:
+        '200': { $ref: '#/components/responses/Application' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /applications/{id}/status:
+    parameters:
+      - { $ref: '#/components/parameters/Id' }
+    patch:
+      tags: [Applications]
+      summary: Change status; APPLIED requires an applied date
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StatusChange' }
+      responses:
+        '200': { $ref: '#/components/responses/Application' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /applications/{id}/archive:
+    parameters:
+      - { $ref: '#/components/parameters/Id' }
+    post:
+      tags: [Applications]
+      summary: Archive an active application (linked tasks and interviews are kept but hidden and read-only)
+      responses:
+        '200': { $ref: '#/components/responses/Application' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /applications/{id}/restore:
+    parameters:
+      - { $ref: '#/components/parameters/Id' }
+    post:
+      tags: [Applications]
+      summary: Restore an archived application
+      responses:
+        '200': { $ref: '#/components/responses/Application' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /applications/{id}/tasks:
+    parameters:
+      - { $ref: '#/components/parameters/Id' }
+    get:
+      tags: [Tasks]
+      summary: Tasks of one application (including archived parents), by effective deadline then ID
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+      responses:
+        '200':
+          description: One page of tasks
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskPage' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /applications/{id}/interviews:
+    parameters:
+      - { $ref: '#/components/parameters/Id' }
+    get:
+      tags: [Interviews]
+      summary: Interviews of one application (including archived parents), newest first
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+      responses:
+        '200':
+          description: One page of interviews
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InterviewPage' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /tasks:
+    get:
+      tags: [Tasks]
+      summary: Tasks of active applications
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { name: view, in: query, schema: { type: string, enum: [all, open, completed, overdue, upcoming], default: all } }
+      responses:
+        '200':
+          description: One page of tasks ordered by effective deadline then ID
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskPage' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+    post:
+      tags: [Tasks]
+      summary: Create a task on an active owned application
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskCreate' }
+      responses:
+        '201': { $ref: '#/components/responses/Task' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /tasks/{id}:
+    parameters:
+      - { $ref: '#/components/parameters/Id' }
+    get:
+      tags: [Tasks]
+      summary: Get an owned task
+      responses:
+        '200': { $ref: '#/components/responses/Task' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [Tasks]
+      summary: Update title, note, due date, due time, or time zone
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskPatch' }
+      responses:
+        '200': { $ref: '#/components/responses/Task' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Tasks]
+      summary: Permanently delete a task
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /tasks/{id}/complete:
+    parameters:
+      - { $ref: '#/components/parameters/Id' }
+    post:
+      tags: [Tasks]
+      summary: Mark a task completed (idempotent)
+      responses:
+        '200': { $ref: '#/components/responses/Task' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /tasks/{id}/reopen:
+    parameters:
+      - { $ref: '#/components/parameters/Id' }
+    post:
+      tags: [Tasks]
+      summary: Reopen a completed task (idempotent)
+      responses:
+        '200': { $ref: '#/components/responses/Task' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /interviews:
+    get:
+      tags: [Interviews]
+      summary: Interviews of active applications
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - name: view
+          in: query
+          description: next7days is now inclusive to now + 168 hours exclusive and matches the dashboard
+          schema: { type: string, enum: [all, future, next7days, past], default: all }
+      responses:
+        '200':
+          description: One page of interviews
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InterviewPage' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+    post:
+      tags: [Interviews]
+      summary: Record an interview on an active owned application
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InterviewCreate' }
+      responses:
+        '201': { $ref: '#/components/responses/Interview' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /interviews/{id}:
+    parameters:
+      - { $ref: '#/components/parameters/Id' }
+    get:
+      tags: [Interviews]
+      summary: Get an owned interview
+      responses:
+        '200': { $ref: '#/components/responses/Interview' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [Interviews]
+      summary: Partial update; send localDate, localTime, and timeZone together to move the start
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InterviewPatch' }
+      responses:
+        '200': { $ref: '#/components/responses/Interview' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Interviews]
+      summary: Permanently delete an interview
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /dashboard:
+    get:
+      tags: [Dashboard]
+      summary: Status counts and attention sections for the whole active workspace
+      responses:
+        '200':
+          description: Dashboard snapshot; up to five items per section, totals cover all matches
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dashboard' }
+        '401': { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: NEXTSTEP_SESSION
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: pageSize
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+  responses:
+    Error:
+      description: Structured error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    Me:
+      description: Current account
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Me' }
+    Application:
+      description: Application
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Application' }
+    Task:
+      description: Task
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Task' }
+    Interview:
+      description: Interview
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Interview' }
+  schemas:
+    ApiError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Stable code such as VALIDATION_ERROR, NOT_FOUND, UNAUTHENTICATED, CSRF_INVALID, DEMO_EXPIRED, APPLICATION_ARCHIVED, RATE_LIMITED
+        message: { type: string }
+        fieldErrors:
+          type: object
+          additionalProperties: { type: string }
+        requestId: { type: string }
+    CsrfToken:
+      type: object
+      required: [headerName, token]
+      properties:
+        headerName: { type: string, examples: [X-CSRF-TOKEN] }
+        token: { type: string }
+    AccountKind: { type: string, enum: [NORMAL, DEMO] }
+    Me:
+      type: object
+      required: [id, kind, displayName, email, timeZone, demoExpiresAt]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: '#/components/schemas/AccountKind' }
+        displayName: { type: string }
+        email: { type: [string, 'null'], description: Null for demo accounts }
+        timeZone: { type: string, description: IANA time zone }
+        demoExpiresAt: { type: [string, 'null'], format: date-time }
+    RegisterRequest:
+      type: object
+      required: [displayName, email, password, timeZone]
+      properties:
+        displayName: { type: string, maxLength: 80 }
+        email: { type: string, maxLength: 254 }
+        password: { type: string, minLength: 12, maxLength: 128 }
+        timeZone: { type: string }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string }
+        password: { type: string }
+    DemoRequest:
+      type: object
+      properties:
+        timeZone: { type: string, description: Used to place seeded dates; defaults to UTC }
+    ProfilePatch:
+      type: object
+      properties:
+        displayName: { type: string, maxLength: 80 }
+        timeZone: { type: string }
+    ApplicationStatus: { type: string, enum: [SAVED, APPLIED, INTERVIEW, OFFER, REJECTED, WITHDRAWN] }
+    WorkArrangement: { type: string, enum: [REMOTE, HYBRID, ONSITE] }
+    EmploymentType: { type: string, enum: [FULL_TIME, PART_TIME, CONTRACT, INTERNSHIP, OTHER] }
+    SalaryPeriod: { type: string, enum: [HOUR, MONTH, YEAR] }
+    TaskStatus: { type: string, enum: [OPEN, COMPLETED] }
+    DueState: { type: string, enum: [OVERDUE, DUE_TODAY, UPCOMING, LATER, COMPLETED] }
+    InterviewType: { type: string, enum: [PHONE_SCREEN, TECHNICAL, BEHAVIORAL, FINAL, OTHER] }
+    ApplicationFields:
+      type: object
+      properties:
+        company: { type: string, maxLength: 160 }
+        jobTitle: { type: string, maxLength: 160 }
+        jobUrl: { type: [string, 'null'], maxLength: 2048, description: http or https only }
+        location: { type: [string, 'null'], maxLength: 160 }
+        workArrangement: { oneOf: [{ $ref: '#/components/schemas/WorkArrangement' }, { type: 'null' }] }
+        employmentType: { oneOf: [{ $ref: '#/components/schemas/EmploymentType' }, { type: 'null' }] }
+        salaryMin: { type: [string, 'null'], description: Decimal string, up to 2 decimal places }
+        salaryMax: { type: [string, 'null'] }
+        salaryCurrency: { type: [string, 'null'], description: ISO 4217 code; required with any salary bound }
+        salaryPeriod: { oneOf: [{ $ref: '#/components/schemas/SalaryPeriod' }, { type: 'null' }] }
+        appliedDate: { type: [string, 'null'], format: date }
+        contactName: { type: [string, 'null'], maxLength: 160 }
+        contactEmail: { type: [string, 'null'], maxLength: 254 }
+        notes: { type: [string, 'null'], maxLength: 10000, description: Plain text }
+    ApplicationCreate:
+      allOf:
+        - $ref: '#/components/schemas/ApplicationFields'
+        - type: object
+          required: [company, jobTitle]
+          properties:
+            status: { $ref: '#/components/schemas/ApplicationStatus' }
+    ApplicationPatch:
+      $ref: '#/components/schemas/ApplicationFields'
+    StatusChange:
+      type: object
+      required: [status]
+      properties:
+        status: { $ref: '#/components/schemas/ApplicationStatus' }
+        appliedDate: { type: [string, 'null'], format: date }
+    TaskBrief:
+      type: object
+      required: [id, title, dueDate, dueTime, timeZone, dueAt, dueState]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        dueDate: { type: string, format: date }
+        dueTime: { type: [string, 'null'] }
+        timeZone: { type: string }
+        dueAt: { type: [string, 'null'], format: date-time }
+        dueState: { $ref: '#/components/schemas/DueState' }
+    Application:
+      type: object
+      required: [id, company, jobTitle, status, jobUrl, location, workArrangement, employmentType, salaryMin, salaryMax,
+                 salaryCurrency, salaryPeriod, appliedDate, contactName, contactEmail, notes, archived, archivedAt,
+                 createdAt, updatedAt, nextTask]
+      properties:
+        id: { type: string, format: uuid }
+        company: { type: string }
+        jobTitle: { type: string }
+        status: { $ref: '#/components/schemas/ApplicationStatus' }
+        jobUrl: { type: [string, 'null'] }
+        location: { type: [string, 'null'] }
+        workArrangement: { oneOf: [{ $ref: '#/components/schemas/WorkArrangement' }, { type: 'null' }] }
+        employmentType: { oneOf: [{ $ref: '#/components/schemas/EmploymentType' }, { type: 'null' }] }
+        salaryMin: { type: [string, 'null'] }
+        salaryMax: { type: [string, 'null'] }
+        salaryCurrency: { type: [string, 'null'] }
+        salaryPeriod: { oneOf: [{ $ref: '#/components/schemas/SalaryPeriod' }, { type: 'null' }] }
+        appliedDate: { type: [string, 'null'], format: date }
+        contactName: { type: [string, 'null'] }
+        contactEmail: { type: [string, 'null'] }
+        notes: { type: [string, 'null'] }
+        archived: { type: boolean }
+        archivedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        nextTask: { oneOf: [{ $ref: '#/components/schemas/TaskBrief' }, { type: 'null' }] }
+    ApplicationSummary:
+      type: object
+      required: [id, company, jobTitle, status, archived]
+      properties:
+        id: { type: string, format: uuid }
+        company: { type: string }
+        jobTitle: { type: string }
+        status: { $ref: '#/components/schemas/ApplicationStatus' }
+        archived: { type: boolean }
+    Task:
+      type: object
+      required: [id, applicationId, application, title, note, dueDate, dueTime, timeZone, dueAt, status, completedAt,
+                 dueState, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        applicationId: { type: string, format: uuid }
+        application: { $ref: '#/components/schemas/ApplicationSummary' }
+        title: { type: string }
+        note: { type: [string, 'null'] }
+        dueDate: { type: string, format: date }
+        dueTime: { type: [string, 'null'], description: HH:mm local time }
+        timeZone: { type: string }
+        dueAt: { type: [string, 'null'], format: date-time }
+        status: { $ref: '#/components/schemas/TaskStatus' }
+        completedAt: { type: [string, 'null'], format: date-time }
+        dueState: { $ref: '#/components/schemas/DueState' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    TaskCreate:
+      type: object
+      required: [applicationId, title, dueDate, timeZone]
+      properties:
+        applicationId: { type: string, format: uuid }
+        title: { type: string, maxLength: 200 }
+        note: { type: [string, 'null'], maxLength: 2000 }
+        dueDate: { type: string, format: date }
+        dueTime: { type: [string, 'null'], description: HH:mm }
+        timeZone: { type: string }
+    TaskPatch:
+      type: object
+      properties:
+        title: { type: string, maxLength: 200 }
+        note: { type: [string, 'null'], maxLength: 2000 }
+        dueDate: { type: string, format: date }
+        dueTime: { type: [string, 'null'] }
+        timeZone: { type: string }
+    Interview:
+      type: object
+      required: [id, applicationId, application, type, startsAt, timeZone, localDate, localTime, durationMinutes,
+                 location, meetingUrl, interviewerName, notes, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        applicationId: { type: string, format: uuid }
+        application: { $ref: '#/components/schemas/ApplicationSummary' }
+        type: { $ref: '#/components/schemas/InterviewType' }
+        startsAt: { type: string, format: date-time }
+        timeZone: { type: string }
+        localDate: { type: string, format: date }
+        localTime: { type: string }
+        durationMinutes: { type: [integer, 'null'] }
+        location: { type: [string, 'null'] }
+        meetingUrl: { type: [string, 'null'] }
+        interviewerName: { type: [string, 'null'] }
+        notes: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    InterviewCreate:
+      type: object
+      required: [applicationId, type, localDate, localTime, timeZone]
+      properties:
+        applicationId: { type: string, format: uuid }
+        type: { $ref: '#/components/schemas/InterviewType' }
+        localDate: { type: string, format: date }
+        localTime: { type: string }
+        timeZone: { type: string }
+        durationMinutes: { type: [integer, 'null'], minimum: 1, maximum: 1440 }
+        location: { type: [string, 'null'], maxLength: 160 }
+        meetingUrl: { type: [string, 'null'], maxLength: 2048 }
+        interviewerName: { type: [string, 'null'], maxLength: 160 }
+        notes: { type: [string, 'null'], maxLength: 10000 }
+    InterviewPatch:
+      type: object
+      properties:
+        type: { $ref: '#/components/schemas/InterviewType' }
+        localDate: { type: string, format: date }
+        localTime: { type: string }
+        timeZone: { type: string }
+        durationMinutes: { type: [integer, 'null'] }
+        location: { type: [string, 'null'] }
+        meetingUrl: { type: [string, 'null'] }
+        interviewerName: { type: [string, 'null'] }
+        notes: { type: [string, 'null'] }
+    PageMeta:
+      type: object
+      required: [page, pageSize, total, totalPages]
+      properties:
+        page: { type: integer }
+        pageSize: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+    ApplicationPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/Application' } }
+    TaskPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/Task' } }
+    InterviewPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/Interview' } }
+    TaskSection:
+      type: object
+      required: [items, total]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Task' } }
+        total: { type: integer }
+    InterviewSection:
+      type: object
+      required: [items, total]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Interview' } }
+        total: { type: integer }
+    Dashboard:
+      type: object
+      required: [statusCounts, overdueTasks, upcomingTasks, upcomingInterviews]
+      properties:
+        statusCounts:
+          type: object
+          required: [SAVED, APPLIED, INTERVIEW, OFFER, REJECTED, WITHDRAWN]
+          properties:
+            SAVED: { type: integer }
+            APPLIED: { type: integer }
+            INTERVIEW: { type: integer }
+            OFFER: { type: integer }
+            REJECTED: { type: integer }
+            WITHDRAWN: { type: integer }
+        overdueTasks: { $ref: '#/components/schemas/TaskSection' }
+        upcomingTasks: { $ref: '#/components/schemas/TaskSection' }
+        upcomingInterviews: { $ref: '#/components/schemas/InterviewSection' }
+security:
+  - session: []
+

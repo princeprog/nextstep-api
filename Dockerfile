@@ -16,7 +16,8 @@ FROM eclipse-temurin:25-jre@sha256:ecdc0adb37bde1a281c4d245a3cd535004b1fc8322d56
 RUN groupadd --system --gid 10001 nextstep \
     && useradd --system --uid 10001 --gid nextstep --no-create-home --shell /usr/sbin/nologin nextstep
 WORKDIR /app
-COPY --from=build --chown=nextstep:nextstep /tmp/app.jar /app/app.jar
+# The jar stays owned by root, so code running in the API can't rewrite it.
+COPY --from=build /tmp/app.jar /app/app.jar
 USER 10001
 ENV SPRING_PROFILES_ACTIVE=production
 EXPOSE 8080

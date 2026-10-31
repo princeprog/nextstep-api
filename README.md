@@ -162,7 +162,7 @@ Base images are pinned by digest, and Dependabot proposes updates.
 
 ```bash
 docker build -t nextstep-api .
-docker run -p 8080:8080 \
+docker run -p 127.0.0.1:8080:8080 \
   -e DATABASE_URL=jdbc:postgresql://<db host>:5432/nextstep -e DATABASE_USER=<user> -e DATABASE_PASSWORD=<secret> \
   -e APP_PUBLIC_ORIGIN=https://<app origin> -e IDENTIFIER_HASH_KEY=<32+ random characters> \
   -e MAIL_MODE=smtp -e MAIL_HOST=<smtp host> -e MAIL_USERNAME=<user> -e MAIL_PASSWORD=<secret> \
@@ -171,6 +171,8 @@ docker run -p 8080:8080 \
 ```
 
 The image listens on `PORT` (8080); point the host's probes at `/actuator/health/liveness` and `/actuator/health/readiness`.
+Keep the API on a private network that only the app (and the host's probes) can reach: it is never called by browsers
+directly, and ports Docker publishes skip the host's firewall, so publish on 127.0.0.1 or a private network only.
 Keep secrets in the host's secret manager, never in the image or the repository. CI builds the image, starts it with
 production settings against PostgreSQL 18, and checks readiness, `GET /api/v1/health`, and that it doesn't run as root.
 

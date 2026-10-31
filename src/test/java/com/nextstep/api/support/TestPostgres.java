@@ -75,9 +75,17 @@ public final class TestPostgres {
         }
         Files.writeString(data.resolve("postgresql.conf"), String.join("\n",
                 "", "listen_addresses = '127.0.0.1'", "port = " + port, "fsync = off", "synchronous_commit = off",
-                "full_page_writes = off", "max_connections = 60", ""), StandardOpenOption.APPEND);
-        run(root, "pg_ctl-start", List.of(exe(bin, "pg_ctl"), "start", "-D", data.toString(),
-                "-l", root.resolve("postgres.log").toString(), "-w", "-t", "60"), 90);
+                "full_page_writes = off", "max_connections = 60",
+                // TCP only: packaged Linux builds default to a socket directory (/var/run/postgresql) that an
+                // unprivileged user can't write to, which stops the server from starting.
+                "unix_socket_directories = ''", ""), StandardOpenOption.APPEND);
+        Path serverLog = root.resolve("postgres.log");
+        try {
+            run(root, "pg_ctl-start", List.of(exe(bin, "pg_ctl"), "start", "-D", data.toString(),
+                    "-l", serverLog.toString(), "-w", "-t", "60"), 90);
+        } catch (IllegalStateException ex) {
+            throw new IllegalStateException(ex.getMessage() + "\nServer log:\n" + tail(serverLog), ex);
+        }
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
@@ -114,6 +122,15 @@ public final class TestPostgres {
     private static String exe(Path bin, String tool) {
         boolean windows = System.getProperty("os.name").toLowerCase().contains("win");
         return bin.resolve(windows ? tool + ".exe" : tool).toString();
+    }
+
+    private static String tail(Path file) {
+        try {
+            List<String> lines = Files.readAllLines(file);
+            return String.join("\n", lines.subList(Math.max(0, lines.size() - 20), lines.size()));
+        } catch (IOException ex) {
+            return "(no server log: " + ex.getMessage() + ")";
+        }
     }
 
     private static Path findBin() throws IOException {

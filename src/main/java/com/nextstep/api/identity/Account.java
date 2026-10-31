@@ -20,6 +20,7 @@ public class Account extends BaseEntity {
     private String passwordHash;
     private String timeZone;
     private Instant demoExpiresAt;
+    private Instant emailVerifiedAt;
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -35,6 +36,10 @@ public class Account extends BaseEntity {
     public void setTimeZone(String timeZone) { this.timeZone = timeZone; }
     public Instant getDemoExpiresAt() { return demoExpiresAt; }
     public void setDemoExpiresAt(Instant demoExpiresAt) { this.demoExpiresAt = demoExpiresAt; }
+    public Instant getEmailVerifiedAt() { return emailVerifiedAt; }
+    public void setEmailVerifiedAt(Instant emailVerifiedAt) { this.emailVerifiedAt = emailVerifiedAt; }
+    /** Demo workspaces have no email, so verification never limits them. */
+    public boolean hasVerifiedAccess() { return kind == AccountKind.DEMO || emailVerifiedAt != null; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }

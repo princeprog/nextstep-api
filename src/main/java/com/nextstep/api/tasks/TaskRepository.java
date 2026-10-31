@@ -1,5 +1,6 @@
 package com.nextstep.api.tasks;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -10,5 +11,7 @@ public interface TaskRepository extends JpaRepository<Task, UUID> {
     Optional<Task> findByIdAndOwnerId(UUID id, UUID ownerId);
 
     long countByOwnerId(UUID ownerId);
+
+    List<Task> findAllByOwnerIdOrderByCreatedAtAsc(UUID ownerId);
 }
 

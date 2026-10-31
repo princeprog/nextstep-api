@@ -6,14 +6,22 @@ import java.security.Principal;
 import java.time.Instant;
 import java.util.UUID;
 
-/** The identity stored in the server-side session. The name is the account ID, used to find all its sessions. */
-public record AccountPrincipal(UUID id, AccountKind kind, Instant demoExpiresAt) implements Principal, Serializable {
+/**
+ * The identity stored in the server-side session. The name is the account ID, used to find all its sessions.
+ * emailVerified is a cached hint; the database is checked again before access is refused.
+ */
+public record AccountPrincipal(UUID id, AccountKind kind, Instant demoExpiresAt, boolean emailVerified)
+        implements Principal, Serializable {
 
     @Serial
     private static final long serialVersionUID = 1L;
 
     public static AccountPrincipal of(Account account) {
-        return new AccountPrincipal(account.getId(), account.getKind(), account.getDemoExpiresAt());
+        return new AccountPrincipal(account.getId(), account.getKind(), account.getDemoExpiresAt(), account.hasVerifiedAccess());
+    }
+
+    public AccountPrincipal withEmailVerified() {
+        return new AccountPrincipal(id, kind, demoExpiresAt, true);
     }
 
     @Override

@@ -1,5 +1,6 @@
 package com.nextstep.api.applications;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -12,6 +13,8 @@ public interface ApplicationRepository extends JpaRepository<Application, UUID> 
     Optional<Application> findByIdAndOwnerId(UUID id, UUID ownerId);
 
     long countByOwnerId(UUID ownerId);
+
+    List<Application> findAllByOwnerIdOrderByCreatedAtAsc(UUID ownerId);
 
     @Query("""
             select count(a) from Application a

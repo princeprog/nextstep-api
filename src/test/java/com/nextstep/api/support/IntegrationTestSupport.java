@@ -19,6 +19,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
+import com.nextstep.api.identity.BreachedPasswordChecker;
+import com.nextstep.api.support.TestBrowser.Response;
+
 import tools.jackson.databind.ObjectMapper;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -31,6 +34,9 @@ public abstract class IntegrationTestSupport {
      */
     public static final String TEST_IDENTIFIER_KEY = UUID.randomUUID() + "-" + UUID.randomUUID();
 
+    /** The password used by the registration helpers. */
+    public static final String PASSWORD = "a-strong-passphrase";
+
     private static final AtomicInteger IP_COUNTER = new AtomicInteger(1);
 
     @TestConfiguration
@@ -39,6 +45,19 @@ public abstract class IntegrationTestSupport {
         @Primary
         public MutableClock testClock() {
             return new MutableClock();
+        }
+
+        @Bean
+        @Primary
+        public TestMailbox testMailbox() {
+            return new TestMailbox();
+        }
+
+        /** Stands in for Pwned Passwords: any password containing "breached" counts as breached. */
+        @Bean
+        @Primary
+        public BreachedPasswordChecker testBreachedPasswords() {
+            return password -> password.contains("breached");
         }
     }
 
@@ -50,6 +69,7 @@ public abstract class IntegrationTestSupport {
         registry.add("spring.datasource.password", postgres::password);
         registry.add("server.address", () -> "127.0.0.1");
         registry.add("nextstep.security.identifier-key", () -> TEST_IDENTIFIER_KEY);
+        registry.add("nextstep.mail.global-per-hour", () -> "1000000");
     }
 
     @LocalServerPort
@@ -63,6 +83,9 @@ public abstract class IntegrationTestSupport {
 
     @Autowired
     protected JdbcTemplate jdbc;
+
+    @Autowired
+    protected TestMailbox mailbox;
 
     @AfterEach
     void resetClock() {
@@ -85,15 +108,39 @@ public abstract class IntegrationTestSupport {
         return "user-" + UUID.randomUUID() + "@example.com";
     }
 
-    /** Registers a new normal account and returns a signed-in browser with a fresh CSRF token. */
-    protected TestBrowser signedInUser(String timeZone) {
+    /** Starts a registration from a fresh browser and returns that browser (with its CSRF token). */
+    protected TestBrowser register(String email, String password, String timeZone) {
         TestBrowser browser = browser();
         browser.refreshCsrf();
-        TestBrowser.Response response = browser.post("/api/v1/auth/register", map(
-                "displayName", "Test User", "email", uniqueEmail(), "password", "a-strong-passphrase", "timeZone", timeZone));
-        assertThat(response.status()).as(response.body()).isEqualTo(201);
+        Response response = browser.post("/api/v1/auth/register", map(
+                "displayName", "Test User", "email", email, "password", password, "timeZone", timeZone));
+        assertThat(response.status()).as(response.body()).isEqualTo(202);
+        return browser;
+    }
+
+    /** Registers and confirms the email with the link from the captured confirmation email. */
+    protected void registerVerified(String email, String password, String timeZone) {
+        TestBrowser browser = register(email, password, timeZone);
+        String token = TestMailbox.token(mailbox.await(email, "Confirm your email"));
+        Response verified = browser.post("/api/v1/auth/verify-email", map("token", token));
+        assertThat(verified.status()).as(verified.body()).isEqualTo(204);
+    }
+
+    /** Signs in from a fresh browser and returns it with a fresh CSRF token. */
+    protected TestBrowser signIn(String email, String password) {
+        TestBrowser browser = browser();
+        browser.refreshCsrf();
+        Response response = browser.post("/api/v1/auth/login", map("email", email, "password", password));
+        assertThat(response.status()).as(response.body()).isEqualTo(200);
         browser.refreshCsrf();
         return browser;
+    }
+
+    /** Registers, verifies, and signs in a new normal account. */
+    protected TestBrowser signedInUser(String timeZone) {
+        String email = uniqueEmail();
+        registerVerified(email, PASSWORD, timeZone);
+        return signIn(email, PASSWORD);
     }
 
     protected TestBrowser signedInUser() {

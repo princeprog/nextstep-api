@@ -22,5 +22,13 @@ public interface AccountRepository extends JpaRepository<Account, UUID> {
             order by a.demoExpiresAt
             """)
     List<UUID> findExpiredDemoIds(@Param("now") Instant now, Pageable pageable);
+
+    @Query("""
+            select a.id from Account a
+            where a.kind = com.nextstep.api.identity.AccountKind.NORMAL and a.emailVerifiedAt is null
+              and a.createdAt <= :cutoff
+            order by a.createdAt
+            """)
+    List<UUID> findUnverifiedCreatedBefore(@Param("cutoff") Instant cutoff, Pageable pageable);
 }
 

@@ -83,5 +83,21 @@ public class SessionSupport {
         return namedJdbc.update("DELETE FROM spring_session WHERE principal_name IN (:names)",
                 new MapSqlParameterSource("names", accountIds.stream().map(UUID::toString).toList()));
     }
+
+    /** Removes every other stored session of an account, keeping the session with the given ID. */
+    public int deleteOtherSessions(UUID accountId, String keepSessionId) {
+        return jdbc.update("DELETE FROM spring_session WHERE principal_name = ? AND session_id <> ?",
+                accountId.toString(), keepSessionId);
+    }
+
+    /** Replaces the principal in the current session without starting a new one, e.g. after verification elsewhere. */
+    public void refreshPrincipal(HttpServletRequest request, HttpServletResponse response, AccountPrincipal principal) {
+        Authentication auth = UsernamePasswordAuthenticationToken.authenticated(
+                principal, null, List.of(new SimpleGrantedAuthority("ROLE_USER")));
+        SecurityContext context = holder.createEmptyContext();
+        context.setAuthentication(auth);
+        holder.setContext(context);
+        contextRepository.saveContext(context, request, response);
+    }
 }
 

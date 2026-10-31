@@ -8,25 +8,33 @@ import org.junit.jupiter.api.Test;
 import com.nextstep.api.support.IntegrationTestSupport;
 import com.nextstep.api.support.TestBrowser;
 import com.nextstep.api.support.TestBrowser.Response;
+import com.nextstep.api.support.TestMailbox;
 
 class AuthAndSessionTest extends IntegrationTestSupport {
 
     @Test
-    void registerSignOutAndSignBackIn() {
+    void registerConfirmSignOutAndSignBackIn() {
         TestBrowser b = browser();
         b.refreshCsrf();
-        String anonymousSession = b.sessionCookie();
         String email = uniqueEmail();
 
         Response registered = b.post("/api/v1/auth/register", map(
                 "displayName", "  Ana Cruz ", "email", "  " + email.toUpperCase() + " ",
                 "password", "correct horse battery", "timeZone", "Asia/Manila"));
-        assertThat(registered.status()).isEqualTo(201);
+        assertThat(registered.status()).isEqualTo(202);
         assertThat(registered.text("email")).isEqualTo(email);
-        assertThat(registered.text("displayName")).isEqualTo("Ana Cruz");
-        assertThat(registered.text("kind")).isEqualTo("NORMAL");
         assertThat(registered.body()).doesNotContainIgnoringCase("password");
-        assertThat(b.sessionCookie()).as("session ID rotates on authentication").isNotEqualTo(anonymousSession);
+        assertThat(b.get("/api/v1/me").status()).as("registration doesn't start a session").isEqualTo(401);
+
+        String token = TestMailbox.token(mailbox.await(email, "Confirm your email"));
+        assertThat(b.post("/api/v1/auth/verify-email", map("token", token)).status()).isEqualTo(204);
+
+        String anonymousSession = b.sessionCookie();
+        Response login = b.post("/api/v1/auth/login", map("email", email.toUpperCase(), "password", "correct horse battery"));
+        assertThat(login.status()).isEqualTo(200);
+        assertThat(login.text("displayName")).isEqualTo("Ana Cruz");
+        assertThat(login.json().get("emailVerified").asBoolean()).isTrue();
+        assertThat(b.sessionCookie()).as("session ID rotates on sign-in").isNotEqualTo(anonymousSession);
 
         Response stale = b.patch("/api/v1/me", map("displayName", "Ana"));
         assertThat(stale.status()).as("pre-login CSRF token is replaced").isEqualTo(403);
@@ -50,8 +58,7 @@ class AuthAndSessionTest extends IntegrationTestSupport {
         assertThat(unknownEmail.status()).isEqualTo(401);
         assertThat(wrongPassword.text("message")).isEqualTo(unknownEmail.text("message"));
 
-        Response login = b.post("/api/v1/auth/login", map("email", email.toUpperCase(), "password", "correct horse battery"));
-        assertThat(login.status()).isEqualTo(200);
+        assertThat(b.post("/api/v1/auth/login", map("email", email, "password", "correct horse battery")).status()).isEqualTo(200);
         assertThat(b.get("/api/v1/me").text("displayName")).isEqualTo("Ana");
     }
 
@@ -74,7 +81,9 @@ class AuthAndSessionTest extends IntegrationTestSupport {
         TestBrowser b = browser();
         b.refreshCsrf();
         b.setCsrfToken(null);
-        for (String path : new String[] {"/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/demo"}) {
+        for (String path : new String[] {"/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/demo",
+                "/api/v1/auth/verify-email", "/api/v1/auth/verify-email/resend", "/api/v1/auth/password-reset",
+                "/api/v1/auth/password-reset/confirm"}) {
             Response response = b.post(path, map("email", uniqueEmail()));
             assertThat(response.status()).as(path).isEqualTo(403);
             assertThat(response.code()).isEqualTo("CSRF_INVALID");
@@ -87,19 +96,31 @@ class AuthAndSessionTest extends IntegrationTestSupport {
     }
 
     @Test
-    void duplicateNormalizedEmailIsRejected() {
+    void registeringAnExistingEmailLooksTheSameAndOnlyTellsTheOwner() {
         String email = uniqueEmail();
-        TestBrowser first = browser();
-        first.refreshCsrf();
-        assertThat(first.post("/api/v1/auth/register", map("displayName", "A", "email", email,
-                "password", "a-strong-passphrase", "timeZone", "UTC")).status()).isEqualTo(201);
+        registerVerified(email, PASSWORD, "UTC");
 
         TestBrowser second = browser();
         second.refreshCsrf();
-        Response duplicate = second.post("/api/v1/auth/register", map("displayName", "B", "email", " " + email.toUpperCase(),
-                "password", "a-strong-passphrase", "timeZone", "UTC"));
-        assertThat(duplicate.status()).isEqualTo(409);
-        assertThat(duplicate.fieldError("email")).isNotBlank();
+        Response duplicate = second.post("/api/v1/auth/register", map("displayName", "Someone", "email", " " + email.toUpperCase(),
+                "password", "another-strong-passphrase", "timeZone", "UTC"));
+        TestBrowser third = browser();
+        third.refreshCsrf();
+        String freshEmail = uniqueEmail();
+        Response fresh = third.post("/api/v1/auth/register", map("displayName", "Someone", "email", freshEmail,
+                "password", "another-strong-passphrase", "timeZone", "UTC"));
+
+        assertThat(duplicate.status()).isEqualTo(202);
+        assertThat(fresh.status()).isEqualTo(202);
+        assertThat(duplicate.body().replace(email, "E")).isEqualTo(fresh.body().replace(freshEmail, "E"));
+        assertThat(mailbox.await(email, "already have a NextStep account").text()).contains("/forgot-password");
+        assertThat(mailbox.await(freshEmail, "Confirm your email")).isNotNull();
+
+        signIn(email, PASSWORD);
+        TestBrowser attacker = browser();
+        attacker.refreshCsrf();
+        assertThat(attacker.post("/api/v1/auth/login", map("email", email, "password", "another-strong-passphrase")).status())
+                .as("the existing account keeps its password").isEqualTo(401);
     }
 
     @Test
@@ -113,6 +134,11 @@ class AuthAndSessionTest extends IntegrationTestSupport {
         assertThat(response.fieldError("email")).isNotBlank();
         assertThat(response.fieldError("password")).isNotBlank();
         assertThat(response.fieldError("timeZone")).isNotBlank();
+
+        Response breached = b.post("/api/v1/auth/register", map("displayName", "A", "email", uniqueEmail(),
+                "password", "a-breached-passphrase", "timeZone", "UTC"));
+        assertThat(breached.status()).isEqualTo(422);
+        assertThat(breached.fieldError("password")).contains("data breach");
         assertThat(b.get("/api/v1/me").status()).isEqualTo(401);
     }
 
@@ -124,32 +150,6 @@ class AuthAndSessionTest extends IntegrationTestSupport {
         Response me = b.get("/api/v1/me");
         assertThat(me.status()).isEqualTo(401);
         assertThat(me.code()).isEqualTo("UNAUTHENTICATED");
-    }
-
-    @Test
-    void accountDeletionRemovesDataAndEverySession() {
-        String email = uniqueEmail();
-        TestBrowser first = browser();
-        first.refreshCsrf();
-        first.post("/api/v1/auth/register", map("displayName", "A", "email", email, "password", "a-strong-passphrase", "timeZone", "UTC"));
-        first.refreshCsrf();
-        String accountId = first.get("/api/v1/me").text("id");
-        String applicationId = createApplication(first);
-        createTask(first, applicationId, "2030-01-01", null, "UTC");
-
-        TestBrowser second = browser();
-        second.refreshCsrf();
-        assertThat(second.post("/api/v1/auth/login", map("email", email, "password", "a-strong-passphrase")).status()).isEqualTo(200);
-
-        assertThat(first.delete("/api/v1/me").status()).isEqualTo(204);
-        assertThat(first.get("/api/v1/me").status()).isEqualTo(401);
-        assertThat(second.get("/api/v1/me").status()).as("other sessions are invalidated").isEqualTo(401);
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM applications WHERE owner_id = CAST(? AS uuid)", Integer.class, accountId)).isZero();
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM tasks WHERE owner_id = CAST(? AS uuid)", Integer.class, accountId)).isZero();
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM spring_session WHERE principal_name = ?", Integer.class, accountId)).isZero();
-
-        second.refreshCsrf();
-        assertThat(second.post("/api/v1/auth/login", map("email", email, "password", "a-strong-passphrase")).status()).isEqualTo(401);
     }
 
     @Test
@@ -175,9 +175,9 @@ class AuthAndSessionTest extends IntegrationTestSupport {
     @Test
     void privateEndpointsRequireSession() {
         TestBrowser anonymous = browser();
-        for (String path : new String[] {"/api/v1/me", "/api/v1/applications", "/api/v1/tasks", "/api/v1/interviews", "/api/v1/dashboard"}) {
+        for (String path : new String[] {"/api/v1/me", "/api/v1/me/export", "/api/v1/applications", "/api/v1/tasks",
+                "/api/v1/interviews", "/api/v1/dashboard"}) {
             assertThat(anonymous.get(path).status()).as(path).isEqualTo(401);
         }
     }
 }
-

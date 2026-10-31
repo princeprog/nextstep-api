@@ -58,9 +58,21 @@ class ProductionSettingsCheck implements InitializingBean {
         if (env.getProperty("spring.datasource.password", "").isEmpty()) {
             problems.add("DATABASE_PASSWORD must be set.");
         }
+        if (!"smtp".equals(properties.getMail().getMode())) {
+            problems.add("MAIL_MODE must be smtp; the log mode writes sign-in links to the log instead of sending them.");
+        }
+        if (env.getProperty("spring.mail.host", "").isBlank()) {
+            problems.add("MAIL_HOST must be set to the email provider's SMTP host.");
+        }
+        String from = properties.getMail().getFrom();
+        if (from == null || from.isBlank() || from.contains("localhost")) {
+            problems.add("MAIL_FROM must be an address on the domain the email provider sends for.");
+        }
         NextStepProperties.RateLimit limits = properties.getRateLimit();
         if (limits.getDemoPerHour() > MAX_PER_CLIENT_LIMIT || limits.getRegisterPerHour() > MAX_PER_CLIENT_LIMIT
                 || limits.getLoginPerWindow() > MAX_PER_CLIENT_LIMIT
+                || limits.getEmailRequestsPerHour() > MAX_PER_CLIENT_LIMIT
+                || limits.getTokenAttemptsPerWindow() > MAX_PER_CLIENT_LIMIT
                 || limits.getDemoGlobalPerHour() > MAX_GLOBAL_DEMO_LIMIT) {
             problems.add("Rate limits are set to local test values; remove the relaxed overrides.");
         }

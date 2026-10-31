@@ -14,7 +14,11 @@ import com.nextstep.api.support.TestBrowser.Response;
 
 /** Runs the API with the production profile and checks the cookie and headers a browser would get. */
 @ActiveProfiles("production")
-@TestPropertySource(properties = "nextstep.app-public-origin=https://app.nextstep.example")
+@TestPropertySource(properties = {
+        "nextstep.app-public-origin=https://app.nextstep.example",
+        "nextstep.mail.mode=smtp",
+        "nextstep.mail.from=NextStep <no-reply@nextstep.example>",
+        "spring.mail.host=127.0.0.1"})
 class ProductionProfileTest extends IntegrationTestSupport {
 
     private static final String COOKIE = "__Host-NEXTSTEP_SESSION";

@@ -105,6 +105,7 @@ public final class TestBrowser {
     public Response post(String path, Object body) { return send("POST", path, body, true); }
     public Response patch(String path, Object body) { return send("PATCH", path, body, true); }
     public Response delete(String path) { return send("DELETE", path, null, true); }
+    public Response delete(String path, Object body) { return send("DELETE", path, body, true); }
 
     public Response send(String method, String path, Object body, boolean withCsrf) {
         try {

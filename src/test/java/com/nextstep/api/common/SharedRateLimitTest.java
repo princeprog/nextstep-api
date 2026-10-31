@@ -17,8 +17,6 @@ import com.nextstep.api.support.TestPostgres;
 
 class SharedRateLimitTest extends IntegrationTestSupport {
 
-    private static final String PASSWORD = "a-strong-passphrase";
-
     @Autowired
     NextStepProperties properties;
 
@@ -46,17 +44,14 @@ class SharedRateLimitTest extends IntegrationTestSupport {
     @Test
     void onlyFailedSignInsCountAgainstAnEmail() {
         String email = uniqueEmail();
-        TestBrowser owner = browser();
-        owner.refreshCsrf();
-        assertThat(owner.post("/api/v1/auth/register", map("displayName", "Owner", "email", email,
-                "password", PASSWORD, "timeZone", "UTC")).status()).isEqualTo(201);
+        registerVerified(email, PASSWORD, "UTC");
         for (int i = 0; i < 12; i++) {
-            assertThat(signIn(email, PASSWORD)).as("successful sign-in %d", i + 1).isEqualTo(200);
+            assertThat(signInStatus(email, PASSWORD)).as("successful sign-in %d", i + 1).isEqualTo(200);
         }
         for (int i = 0; i < 10; i++) {
-            assertThat(signIn(email, "not-the-password")).isEqualTo(401);
+            assertThat(signInStatus(email, "not-the-password")).isEqualTo(401);
         }
-        assertThat(signIn(email, PASSWORD)).as("ten failures lock the email for the window").isEqualTo(429);
+        assertThat(signInStatus(email, PASSWORD)).as("ten failures lock the email for the window").isEqualTo(429);
     }
 
     @Test
@@ -81,7 +76,7 @@ class SharedRateLimitTest extends IntegrationTestSupport {
     }
 
     /** Signs in from a fresh address, so only the per-email limit can apply. */
-    private int signIn(String email, String password) {
+    private int signInStatus(String email, String password) {
         TestBrowser device = browser();
         device.refreshCsrf();
         return device.post("/api/v1/auth/login", map("email", email, "password", password)).status();

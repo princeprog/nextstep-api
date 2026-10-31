@@ -34,7 +34,11 @@ paths:
   /auth/register:
     post:
       tags: [Auth]
-      summary: Create a normal account and sign in
+      summary: Start registration; the confirmation link goes to the email address
+      description: |
+        Answers 202 with the same body whether or not the email already has an account, so registration doesn't reveal
+        which emails are registered. A new account starts unverified and no session is created; the person signs in
+        after confirming the email. An existing account doesn't change; its owner is emailed instead.
       security: []
       requestBody:
         required: true
@@ -42,7 +46,11 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/RegisterRequest' }
       responses:
-        '201': { $ref: '#/components/responses/Me' }
+        '202':
+          description: Registration accepted; check the inbox
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegistrationAccepted' }
         '403': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
@@ -87,6 +95,67 @@ paths:
         '204': { description: Signed out }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
+  /auth/verify-email:
+    post:
+      tags: [Auth]
+      summary: Confirm an email address with the token from its link (does not sign in)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TokenRequest' }
+      responses:
+        '204': { description: Email confirmed }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /auth/verify-email/resend:
+    post:
+      tags: [Auth]
+      summary: Send a new confirmation link if the email has an unverified account (same answer either way)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EmailRequest' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        '403': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /auth/password-reset:
+    post:
+      tags: [Auth]
+      summary: Email a password reset link if the email has an account (same answer either way)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EmailRequest' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        '403': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /auth/password-reset/confirm:
+    post:
+      tags: [Auth]
+      summary: Set a new password with a reset link token; signs the account out everywhere
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PasswordResetConfirm' }
+      responses:
+        '204': { description: Password changed; sign in with the new password }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
   /me:
     get:
       tags: [Profile]
@@ -109,12 +178,47 @@ paths:
         '422': { $ref: '#/components/responses/Error' }
     delete:
       tags: [Profile]
-      summary: Permanently delete a normal account, its data, and all sessions
+      summary: Permanently delete a normal account, its data, and all sessions, after re-checking the password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AccountDeletion' }
       responses:
         '204': { description: Deleted }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /me/password:
+    post:
+      tags: [Profile]
+      summary: Change the password after re-checking the current one; other sessions end and this one rotates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PasswordChange' }
+      responses:
+        '204': { description: Password changed; fetch a new CSRF token before the next write }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /me/export:
+    get:
+      tags: [Profile]
+      summary: Download every record stored for the account as JSON (an attachment)
+      responses:
+        '200':
+          description: The account's data
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountExport' }
+        '401': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
   /applications:
     get:
       tags: [Applications]
@@ -484,6 +588,11 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ApiError' }
+    Accepted:
+      description: Request accepted; the same answer whether or not the email has an account
+      content:
+        application/json:
+          schema: { type: object, additionalProperties: false }
     Me:
       description: Current account
       content:
@@ -511,7 +620,7 @@ components:
       properties:
         code:
           type: string
-          description: Stable code such as VALIDATION_ERROR, NOT_FOUND, UNAUTHENTICATED, CSRF_INVALID, DEMO_EXPIRED, APPLICATION_ARCHIVED, RATE_LIMITED, INVALID_QUERY, PAYLOAD_TOO_LARGE, BUSY
+          description: Stable code such as VALIDATION_ERROR, NOT_FOUND, UNAUTHENTICATED, CSRF_INVALID, DEMO_EXPIRED, APPLICATION_ARCHIVED, RATE_LIMITED, INVALID_QUERY, PAYLOAD_TOO_LARGE, BUSY, EMAIL_NOT_VERIFIED, TOKEN_INVALID, DEMO_ACCOUNT
         message: { type: string }
         fieldErrors:
           type: object
@@ -531,7 +640,7 @@ components:
     AccountKind: { type: string, enum: [NORMAL, DEMO] }
     Me:
       type: object
-      required: [id, kind, displayName, email, timeZone, demoExpiresAt]
+      required: [id, kind, displayName, email, timeZone, demoExpiresAt, emailVerified]
       properties:
         id: { type: string, format: uuid }
         kind: { $ref: '#/components/schemas/AccountKind' }
@@ -539,14 +648,59 @@ components:
         email: { type: [string, 'null'], description: Null for demo accounts }
         timeZone: { type: string, description: IANA time zone }
         demoExpiresAt: { type: [string, 'null'], format: date-time }
+        emailVerified:
+          type: [boolean, 'null']
+          description: Null for demo accounts. Until true, only the profile, export, deletion, and auth endpoints work.
     RegisterRequest:
       type: object
       required: [displayName, email, password, timeZone]
       properties:
         displayName: { type: string, maxLength: 80 }
         email: { type: string, maxLength: 254 }
-        password: { type: string, minLength: 12, maxLength: 128 }
+        password: { type: string, minLength: 12, maxLength: 128, description: Must not appear in a known data breach }
         timeZone: { type: string }
+    RegistrationAccepted:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, description: The normalized address the link was sent to }
+    TokenRequest:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string, description: The token from the link's URL fragment }
+    EmailRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, maxLength: 254 }
+    PasswordResetConfirm:
+      type: object
+      required: [token, password]
+      properties:
+        token: { type: string }
+        password: { type: string, minLength: 12, maxLength: 128 }
+    PasswordChange:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword: { type: string }
+        newPassword: { type: string, minLength: 12, maxLength: 128 }
+    AccountDeletion:
+      type: object
+      required: [password]
+      properties:
+        password: { type: string }
+    AccountExport:
+      type: object
+      required: [format, exportedAt, account, applications, tasks, interviews]
+      properties:
+        format: { type: string, const: nextstep-export/1 }
+        exportedAt: { type: string, format: date-time }
+        account: { type: object, additionalProperties: true }
+        applications: { type: array, items: { type: object, additionalProperties: true } }
+        tasks: { type: array, items: { type: object, additionalProperties: true } }
+        interviews: { type: array, items: { type: object, additionalProperties: true } }
     LoginRequest:
       type: object
       required: [email, password]

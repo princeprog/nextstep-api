@@ -14,10 +14,13 @@ class ProductionSettingsCheckTest {
         MockEnvironment env = new MockEnvironment()
                 .withProperty("server.servlet.session.cookie.secure", "true")
                 .withProperty("server.servlet.session.cookie.name", "__Host-NEXTSTEP_SESSION")
-                .withProperty("spring.datasource.password", "generated-password");
+                .withProperty("spring.datasource.password", "generated-password")
+                .withProperty("spring.mail.host", "smtp.example.net");
         NextStepProperties properties = new NextStepProperties();
         properties.setAppPublicOrigin("https://app.nextstep.example");
         properties.getSecurity().setIdentifierKey("k".repeat(32));
+        properties.getMail().setMode("smtp");
+        properties.getMail().setFrom("NextStep <no-reply@nextstep.example>");
         assertThat(ProductionSettingsCheck.problems(env, properties)).isEmpty();
     }
 
@@ -32,7 +35,8 @@ class ProductionSettingsCheckTest {
         properties.getSecurity().setIdentifierKey("too-short-secret");
         properties.getRateLimit().setLoginPerWindow(1000);
         List<String> problems = ProductionSettingsCheck.problems(env, properties);
-        assertThat(problems).hasSize(6);
+        // Insecure cookie, cookie name, origin, identifier key, database password, mail mode, mail host, sender, limits.
+        assertThat(problems).hasSize(9);
         assertThat(String.join(" ", problems)).doesNotContain("too-short-secret").doesNotContain("localhost");
     }
 }

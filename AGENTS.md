@@ -72,6 +72,8 @@ Product requirements, rules, and decisions live in the owner's local Obsidian va
 - Don't log request bodies, passwords, session or CSRF values, email addresses, client addresses, notes, or contact details.
 - Keep CSRF on for all unsafe endpoints, including register, login, demo, and logout.
 - New settings that are only safe locally must be covered by `ProductionSettingsCheck`.
+- Keep the `Dockerfile` building and starting (CI's image job checks it). Base images are pinned by digest; change the tag
+  and digest together, or let Dependabot do it.
 
 ## Verification
 

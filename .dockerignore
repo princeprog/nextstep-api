@@ -1,0 +1,9 @@
+# Only the build inputs go into the image build context.
+.git
+.github
+.idea
+.vscode
+target
+scripts
+*.iml
+*.log

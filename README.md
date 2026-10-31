@@ -153,6 +153,27 @@ setting, never its value.
 - `/actuator/health`, `/actuator/health/liveness`, and `/actuator/health/readiness` are for the host's probes. The app does
   not forward them, so they are reachable only on the API's own address.
 
+### Container image
+
+`Dockerfile` builds an image any container host can run. A JDK 25 stage packages the jar, and the JRE 25 runtime stage runs it
+as a non-root user (uid 10001) with `SPRING_PROFILES_ACTIVE=production`, so it refuses to start until the production settings
+above are set. The JVM uses up to 75% of the container's memory limit and exits on running out, so the host restarts it.
+Base images are pinned by digest, and Dependabot proposes updates.
+
+```bash
+docker build -t nextstep-api .
+docker run -p 8080:8080 \
+  -e DATABASE_URL=jdbc:postgresql://<db host>:5432/nextstep -e DATABASE_USER=<user> -e DATABASE_PASSWORD=<secret> \
+  -e APP_PUBLIC_ORIGIN=https://<app origin> -e IDENTIFIER_HASH_KEY=<32+ random characters> \
+  -e MAIL_MODE=smtp -e MAIL_HOST=<smtp host> -e MAIL_USERNAME=<user> -e MAIL_PASSWORD=<secret> \
+  -e "MAIL_FROM=NextStep <no-reply@<your domain>>" \
+  nextstep-api
+```
+
+The image listens on `PORT` (8080); point the host's probes at `/actuator/health/liveness` and `/actuator/health/readiness`.
+Keep secrets in the host's secret manager, never in the image or the repository. CI builds the image, starts it with
+production settings against PostgreSQL 18, and checks readiness, `GET /api/v1/health`, and that it doesn't run as root.
+
 ## API
 
 The contract is [`openapi/openapi.yaml`](openapi/openapi.yaml) (OpenAPI 3.1), also served at `GET /api/v1/openapi.yaml`.

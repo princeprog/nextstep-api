@@ -25,6 +25,12 @@ import tools.jackson.databind.ObjectMapper;
 @Import(IntegrationTestSupport.TestClockConfig.class)
 public abstract class IntegrationTestSupport {
 
+    /**
+     * Every test context and the second API instance in SharedRateLimitTest must hash identifiers with the same key.
+     * It is generated per test run, so no key-like literal lives in the repository.
+     */
+    public static final String TEST_IDENTIFIER_KEY = UUID.randomUUID() + "-" + UUID.randomUUID();
+
     private static final AtomicInteger IP_COUNTER = new AtomicInteger(1);
 
     @TestConfiguration
@@ -43,6 +49,7 @@ public abstract class IntegrationTestSupport {
         registry.add("spring.datasource.username", postgres::user);
         registry.add("spring.datasource.password", postgres::password);
         registry.add("server.address", () -> "127.0.0.1");
+        registry.add("nextstep.security.identifier-key", () -> TEST_IDENTIFIER_KEY);
     }
 
     @LocalServerPort
@@ -66,7 +73,12 @@ public abstract class IntegrationTestSupport {
     protected TestBrowser browser() {
         int n = IP_COUNTER.getAndIncrement();
         String ip = "203.0." + (113 + (n / 250) % 10) + "." + (n % 250 + 1);
-        return new TestBrowser(port, objectMapper, ip);
+        return new TestBrowser(port, objectMapper, ip, sessionCookieName());
+    }
+
+    /** The session cookie name this context uses; the production profile prefixes it with __Host-. */
+    protected String sessionCookieName() {
+        return TestBrowser.COOKIE;
     }
 
     protected static String uniqueEmail() {

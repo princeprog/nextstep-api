@@ -49,7 +49,12 @@ public final class JsonInput {
             errors.add(field, "Enter text for this field.");
             return null;
         }
-        return value.stringValue();
+        String text = value.stringValue();
+        if (Validators.hasUnsupportedControl(text)) {
+            errors.add(field, Validators.CONTROL_MESSAGE);
+            return null;
+        }
+        return text;
     }
 
     public Integer integer(String field) {

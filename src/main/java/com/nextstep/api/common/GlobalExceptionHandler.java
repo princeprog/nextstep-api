@@ -27,7 +27,13 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
-    ResponseEntity<ApiError> handleUnreadable(HttpServletRequest request) {
+    ResponseEntity<ApiError> handleUnreadable(HttpMessageNotReadableException ex, HttpServletRequest request) {
+        for (Throwable cause = ex; cause != null; cause = cause.getCause()) {
+            if (cause instanceof RequestSizeLimitFilter.PayloadTooLargeException) {
+                return error(HttpStatus.CONTENT_TOO_LARGE, RequestSizeLimitFilter.CODE, RequestSizeLimitFilter.MESSAGE,
+                        null, request);
+            }
+        }
         return error(HttpStatus.BAD_REQUEST, "MALFORMED_REQUEST", "The request could not be read.", null, request);
     }
 

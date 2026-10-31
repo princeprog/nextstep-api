@@ -15,6 +15,8 @@ import java.util.regex.Pattern;
 /** Shared server-side validation rules from the Data Model and Business Rules notes. */
 public final class Validators {
 
+    public static final String CONTROL_MESSAGE = "Remove unsupported control characters.";
+    private static final String SINGLE_LINE_MESSAGE = "Use a single line.";
     private static final Pattern EMAIL = Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
     private static final Pattern DATE = Pattern.compile("^\\d{4}-\\d{2}-\\d{2}$");
     private static final Pattern TIME = Pattern.compile("^\\d{2}:\\d{2}$");
@@ -38,6 +40,10 @@ public final class Validators {
             in.errors().add(field, "Use " + max + " characters or fewer.");
             return null;
         }
+        if (isMultiLine(value)) {
+            in.errors().add(field, SINGLE_LINE_MESSAGE);
+            return null;
+        }
         return value;
     }
 
@@ -50,6 +56,10 @@ public final class Validators {
         String value = raw.strip();
         if (value.length() > max) {
             in.errors().add(field, "Use " + max + " characters or fewer.");
+            return null;
+        }
+        if (isMultiLine(value)) {
+            in.errors().add(field, SINGLE_LINE_MESSAGE);
             return null;
         }
         return value;
@@ -70,6 +80,27 @@ public final class Validators {
 
     public static String normalizeEmail(String email) {
         return email == null ? null : email.strip().toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * True when the text contains a control character other than tab, line feed, or carriage return. PostgreSQL can't
+     * store NUL at all, and the other control characters have no place in this product's text.
+     */
+    public static boolean hasUnsupportedControl(String value) {
+        if (value == null) {
+            return false;
+        }
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if ((c < 0x20 && c != '\t' && c != '\n' && c != '\r') || c == 0x7F) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isMultiLine(String value) {
+        return value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0;
     }
 
     public static boolean isEmail(String value) {
@@ -110,8 +141,12 @@ public final class Validators {
         return value;
     }
 
+    /**
+     * Java also knows the legacy SystemV/* IDs, which PostgreSQL's time zone database does not. Accepting one would make
+     * every SQL time conversion for that record fail, so they are rejected.
+     */
     public static boolean isZone(String value) {
-        return value != null && value.length() <= 64 && ZONES.contains(value);
+        return value != null && value.length() <= 64 && !value.startsWith("SystemV/") && ZONES.contains(value);
     }
 
     public static ZoneId zone(JsonInput in, String field, boolean required) {

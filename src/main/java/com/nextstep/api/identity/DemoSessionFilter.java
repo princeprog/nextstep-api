@@ -8,6 +8,8 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.filter.OncePerRequestFilter;
 
+import com.nextstep.api.common.ApiErrors;
+
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -42,7 +44,7 @@ class DemoSessionFilter extends OncePerRequestFilter {
             boolean csrfBootstrap = "GET".equals(request.getMethod())
                     && "/api/v1/auth/csrf".equals(request.getRequestURI());
             if (!csrfBootstrap) {
-                SecurityConfig.writeError(objectMapper, request, response, HttpStatus.UNAUTHORIZED, "DEMO_EXPIRED",
+                ApiErrors.write(objectMapper, request, response, HttpStatus.UNAUTHORIZED, "DEMO_EXPIRED",
                         "This demo has expired. Start a new demo to keep exploring.");
                 return;
             }

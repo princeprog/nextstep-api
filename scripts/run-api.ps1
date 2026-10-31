@@ -18,6 +18,7 @@ $env:DATABASE_USER = $secrets.appUser
 $env:DATABASE_PASSWORD = $secrets.appPassword
 if ($RelaxedLimits) {
     $env:DEMO_RATE_LIMIT_PER_HOUR = '1000'
+    $env:DEMO_GLOBAL_RATE_LIMIT_PER_HOUR = '1000'
     $env:REGISTER_RATE_LIMIT_PER_HOUR = '1000'
     $env:LOGIN_RATE_LIMIT_PER_WINDOW = '1000'
 }

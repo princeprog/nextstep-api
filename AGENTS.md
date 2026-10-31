@@ -44,24 +44,31 @@ Product requirements, rules, and decisions live in the owner's local Obsidian va
   Load records with `findByIdAndOwnerId` or owner-scoped SQL; another account's ID returns 404.
 - Archived applications and their tasks and interviews are read-only. Mutations must return 409 `APPLICATION_ARCHIVED`.
 - Use `TimeRules` and the injected `Clock` for every time decision. Keep `DueState` (Java) and the SQL in `TaskQueries` in agreement.
-- Request bodies are read through `JsonInput` so an omitted field differs from an explicit null. Validate the merged record.
-- Schema changes go in a new Flyway migration (`V2__...sql`); never edit an applied migration.
+- Request bodies are read through `JsonInput`, which keeps an omitted field distinct from an explicit null and rejects
+  control characters. Use the `Validators` helpers so single-line fields stay single-line. Validate the merged record.
+- Rate limits go through `RateLimiter` (shared through PostgreSQL); never add in-memory counters. Keys are hashed by
+  `IdentifierHasher`, so never store raw client addresses or emails.
+- Scheduled work must run through `ClusterJobLock` so only one API instance runs it at a time, and should work in bounded batches.
+- Schema changes go in a new Flyway migration (`V3__...sql` next); never edit, rename, or delete one that is on `main`
+  (CI enforces it). Follow "Releasing a migration" in the README.
 - Endpoint changes must update `openapi/openapi.yaml` (`OpenApiContractTest` enforces it). Then regenerate app types with
   `pnpm api:types` in nextstep-app.
-- Don't log request bodies, passwords, session or CSRF values, notes, or contact details.
+- Don't log request bodies, passwords, session or CSRF values, email addresses, client addresses, notes, or contact details.
 - Keep CSRF on for all unsafe endpoints, including register, login, demo, and logout.
+- New settings that are only safe locally must be covered by `ProductionSettingsCheck`.
 
 ## Verification
 
 ```powershell
-.mvnw.cmd verify    # must pass before you finish
+.\mvnw.cmd verify    # must pass before you finish
 ```
 
 Add or update integration tests in `src/test/java` (extend `IntegrationTestSupport`, use `TestBrowser` and `MutableClock`) for
-any rule you change, especially ownership, sessions and CSRF, archive behavior, and time boundaries.
+any rule you change, especially ownership, sessions and CSRF, archive behavior, rate limits, and time boundaries. CI also
+runs the dependency and secret scans described in the README.
 
 ## Don'ts
 
 - No production deployment, external services, or real personal data without an explicit request from the owner.
-- Don't claim production readiness: recovery, email verification, hosting, retention, and privacy policy are open decisions.
-
+- Don't claim production readiness: email verification, password reset, hosting, retention, and the privacy policy are
+  still open decisions.

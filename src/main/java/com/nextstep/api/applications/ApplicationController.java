@@ -107,6 +107,8 @@ public class ApplicationController {
                 errors.add("direction", "Use asc or desc.");
             }
         }
+        rejectControlCharacters(search, "search", errors);
+        rejectControlCharacters(location, "location", errors);
         QueryErrors.throwIfAny(errors);
         String searchText = search == null || search.isBlank() ? null : search.strip();
         String locationText = location == null || location.isBlank() ? null : location.strip();
@@ -119,6 +121,10 @@ public class ApplicationController {
                                         @RequestParam(required = false) String company,
                                         @RequestParam(required = false) String jobTitle,
                                         @RequestParam(required = false) String excludeId) {
+        FieldErrors errors = new FieldErrors();
+        rejectControlCharacters(company, "company", errors);
+        rejectControlCharacters(jobTitle, "jobTitle", errors);
+        QueryErrors.throwIfAny(errors);
         UUID exclude = excludeId == null || excludeId.isBlank() ? null : Validators.parseUuid(excludeId);
         return Map.of("count", service.countDuplicates(owner, company, jobTitle, exclude));
     }
@@ -163,6 +169,13 @@ public class ApplicationController {
             throw ApiException.notFound();
         }
         return parsed;
+    }
+
+    /** Free-text query values go to PostgreSQL, which can't store or compare NUL characters. */
+    private static void rejectControlCharacters(String value, String field, FieldErrors errors) {
+        if (Validators.hasUnsupportedControl(value)) {
+            errors.add(field, Validators.CONTROL_MESSAGE);
+        }
     }
 
     private static <E extends Enum<E>> E optionalEnum(Class<E> type, String value, String field, FieldErrors errors) {

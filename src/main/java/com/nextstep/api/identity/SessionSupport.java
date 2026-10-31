@@ -1,9 +1,12 @@
 package com.nextstep.api.identity;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -26,12 +29,15 @@ public class SessionSupport {
     private final SecurityContextRepository contextRepository;
     private final CsrfAuthenticationStrategy csrfStrategy;
     private final JdbcTemplate jdbc;
+    private final NamedParameterJdbcTemplate namedJdbc;
     private final SecurityContextHolderStrategy holder = SecurityContextHolder.getContextHolderStrategy();
 
-    public SessionSupport(SecurityContextRepository contextRepository, CsrfTokenRepository csrfTokenRepository, JdbcTemplate jdbc) {
+    public SessionSupport(SecurityContextRepository contextRepository, CsrfTokenRepository csrfTokenRepository,
+                          JdbcTemplate jdbc, NamedParameterJdbcTemplate namedJdbc) {
         this.contextRepository = contextRepository;
         this.csrfStrategy = new CsrfAuthenticationStrategy(csrfTokenRepository);
         this.jdbc = jdbc;
+        this.namedJdbc = namedJdbc;
     }
 
     public static AccountPrincipal currentPrincipal() {
@@ -69,12 +75,13 @@ public class SessionSupport {
         return jdbc.update("DELETE FROM spring_session WHERE principal_name = ?", accountId.toString());
     }
 
-    public int deleteAllSessions(List<UUID> accountIds) {
-        int total = 0;
-        for (UUID id : accountIds) {
-            total += deleteAllSessions(id);
+    /** Removes every stored session of several accounts in one statement. */
+    public int deleteAllSessions(Collection<UUID> accountIds) {
+        if (accountIds.isEmpty()) {
+            return 0;
         }
-        return total;
+        return namedJdbc.update("DELETE FROM spring_session WHERE principal_name IN (:names)",
+                new MapSqlParameterSource("names", accountIds.stream().map(UUID::toString).toList()));
     }
 }
 

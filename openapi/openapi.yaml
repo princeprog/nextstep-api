@@ -5,7 +5,8 @@ info:
   description: |
     Private job-search workspace API for the NextStep portfolio MVP.
     The browser calls it on the same origin under /api/v1. Authentication is an HttpOnly session cookie
-    (NEXTSTEP_SESSION); every unsafe request needs the CSRF header returned by GET /auth/csrf.
+    (NEXTSTEP_SESSION locally, __Host-NEXTSTEP_SESSION with the production profile); every unsafe request needs the
+    CSRF header returned by GET /auth/csrf. Request bodies over 256 KiB are rejected with 413.
     Owner identity always comes from the session. Records owned by someone else respond with 404.
     Dates are YYYY-MM-DD, local times HH:mm, instants ISO-8601 UTC, and money amounts decimal strings.
 servers:
@@ -17,6 +18,7 @@ tags:
   - name: Tasks
   - name: Interviews
   - name: Dashboard
+  - name: Operations
 paths:
   /auth/csrf:
     get:
@@ -440,6 +442,22 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Dashboard' }
         '401': { $ref: '#/components/responses/Error' }
+  /health:
+    get:
+      tags: [Operations]
+      summary: Whether the API and its database are reachable, for uptime monitoring through the app's origin
+      security: []
+      responses:
+        '200':
+          description: The API and database are reachable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: The database is unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
 components:
   securitySchemes:
     session:
@@ -493,7 +511,7 @@ components:
       properties:
         code:
           type: string
-          description: Stable code such as VALIDATION_ERROR, NOT_FOUND, UNAUTHENTICATED, CSRF_INVALID, DEMO_EXPIRED, APPLICATION_ARCHIVED, RATE_LIMITED
+          description: Stable code such as VALIDATION_ERROR, NOT_FOUND, UNAUTHENTICATED, CSRF_INVALID, DEMO_EXPIRED, APPLICATION_ARCHIVED, RATE_LIMITED, INVALID_QUERY, PAYLOAD_TOO_LARGE, BUSY
         message: { type: string }
         fieldErrors:
           type: object
@@ -505,6 +523,11 @@ components:
       properties:
         headerName: { type: string, examples: [X-CSRF-TOKEN] }
         token: { type: string }
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [UP, DOWN] }
     AccountKind: { type: string, enum: [NORMAL, DEMO] }
     Me:
       type: object

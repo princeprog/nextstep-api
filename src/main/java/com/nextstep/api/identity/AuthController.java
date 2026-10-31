@@ -1,5 +1,6 @@
 package com.nextstep.api.identity;
 
+import java.time.Duration;
 import java.util.Map;
 
 import org.springframework.http.CacheControl;
@@ -62,7 +63,7 @@ public class AuthController {
                                                HttpServletRequest request, HttpServletResponse response) {
         requireSignedOut();
         rateLimiter.check("register", ClientAddress.of(request), properties.getRateLimit().getRegisterPerHour(),
-                java.time.Duration.ofHours(1));
+                Duration.ofHours(1));
         Account account = accountService.register(JsonInput.of(body));
         sessions.signIn(request, response, AccountPrincipal.of(account));
         return ResponseEntity.status(HttpStatus.CREATED).cacheControl(CacheControl.noStore()).body(MeResponse.of(account));
@@ -84,12 +85,14 @@ public class AuthController {
         in.errors().throwIfAny();
         var limits = properties.getRateLimit();
         rateLimiter.check("login-ip", ClientAddress.of(request), limits.getLoginPerWindow(), limits.getLoginWindow());
-        rateLimiter.check("login-email", email, limits.getLoginPerWindow(), limits.getLoginWindow());
+        // Only failed attempts count against an email, so the owner's own sign-ins never use up its limit.
+        rateLimiter.requireCapacity("login-email", email, limits.getLoginPerWindow(), limits.getLoginWindow());
         AccountPrincipal principal;
         try {
             var result = authenticationManager.authenticate(UsernamePasswordAuthenticationToken.unauthenticated(email, password));
             principal = (AccountPrincipal) result.getPrincipal();
         } catch (AuthenticationException ex) {
+            rateLimiter.record("login-email", email, limits.getLoginWindow());
             throw new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "Email or password is incorrect.", null);
         }
         sessions.signIn(request, response, principal);
@@ -105,7 +108,9 @@ public class AuthController {
         var zone = Validators.zone(in, "timeZone", false);
         in.errors().throwIfAny();
         rateLimiter.check("demo", ClientAddress.of(request), properties.getRateLimit().getDemoPerHour(),
-                java.time.Duration.ofHours(1));
+                Duration.ofHours(1));
+        // A cap across all visitors keeps a flood from many addresses from filling the database with demos.
+        rateLimiter.check("demo-global", "all", properties.getRateLimit().getDemoGlobalPerHour(), Duration.ofHours(1));
         Account account = demoService.createDemo(zone);
         sessions.signIn(request, response, AccountPrincipal.of(account));
         return ResponseEntity.status(HttpStatus.CREATED).cacheControl(CacheControl.noStore()).body(MeResponse.of(account));

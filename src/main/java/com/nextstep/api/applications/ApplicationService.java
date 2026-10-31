@@ -5,7 +5,6 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.Currency;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -268,16 +267,6 @@ public class ApplicationService {
         if (a.getAppliedDate() != null && a.getAppliedDate().isAfter(time.today(ownerZone))) {
             errors.add("appliedDate", "The applied date can't be in the future.");
         }
-    }
-
-    Map<UUID, Application> ownedByIds(UUID ownerId, List<UUID> ids) {
-        Map<UUID, Application> map = new HashMap<>();
-        for (Application application : applications.findAllById(ids)) {
-            if (application.getOwnerId().equals(ownerId)) {
-                map.put(application.getId(), application);
-            }
-        }
-        return map;
     }
 }
 

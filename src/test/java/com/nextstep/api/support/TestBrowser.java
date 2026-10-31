@@ -56,14 +56,27 @@ public final class TestBrowser {
     private final String base;
     private final ObjectMapper json;
     private final String ip;
+    private final String cookieName;
+    private final Map<String, String> extraHeaders = new LinkedHashMap<>();
     private String sessionCookie;
     private String csrfToken;
     private final List<String> setCookieHeaders = new ArrayList<>();
 
     public TestBrowser(int port, ObjectMapper json, String ip) {
+        this(port, json, ip, COOKIE);
+    }
+
+    public TestBrowser(int port, ObjectMapper json, String ip, String cookieName) {
         this.base = "http://127.0.0.1:" + port;
         this.json = json;
         this.ip = ip;
+        this.cookieName = cookieName;
+    }
+
+    /** Adds a header to every later request, for example X-Forwarded-Proto from a TLS-terminating proxy. */
+    public TestBrowser header(String name, String value) {
+        extraHeaders.put(name, value);
+        return this;
     }
 
     public static Map<String, Object> map(Object... keyValues) {
@@ -98,13 +111,14 @@ public final class TestBrowser {
             HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(base + path))
                     .header("X-Forwarded-For", ip)
                     .header("Accept", "application/json");
+            extraHeaders.forEach(builder::header);
             HttpRequest.BodyPublisher publisher = HttpRequest.BodyPublishers.noBody();
             if (body != null) {
                 builder.header("Content-Type", "application/json");
                 publisher = HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body));
             }
             if (sessionCookie != null) {
-                builder.header("Cookie", COOKIE + "=" + sessionCookie);
+                builder.header("Cookie", cookieName + "=" + sessionCookie);
             }
             if (withCsrf && csrfToken != null) {
                 builder.header("X-CSRF-TOKEN", csrfToken);
@@ -115,7 +129,7 @@ public final class TestBrowser {
                 setCookieHeaders.add(header);
                 String pair = header.split(";", 2)[0];
                 int eq = pair.indexOf('=');
-                if (eq > 0 && pair.substring(0, eq).strip().equals(COOKIE)) {
+                if (eq > 0 && pair.substring(0, eq).strip().equals(cookieName)) {
                     String value = pair.substring(eq + 1).strip();
                     boolean cleared = value.isEmpty() || header.toLowerCase().contains("max-age=0");
                     sessionCookie = cleared ? null : value;

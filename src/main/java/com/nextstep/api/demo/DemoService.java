@@ -13,6 +13,7 @@ import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -40,6 +41,9 @@ import com.nextstep.api.tasks.TaskStatus;
 public class DemoService {
 
     private static final Logger log = LoggerFactory.getLogger(DemoService.class);
+
+    /** Expired demos removed per cleanup run; anything left over is removed on the next run. */
+    static final int CLEANUP_BATCH = 500;
 
     private final AccountRepository accounts;
     private final ApplicationRepository applications;
@@ -77,10 +81,10 @@ public class DemoService {
         return account;
     }
 
-    /** Deletes expired demo workspaces and their sessions. Normal accounts are never selected. */
+    /** Deletes up to one batch of expired demo workspaces and their sessions. Normal accounts are never selected. */
     @Transactional
     public int cleanupExpired() {
-        List<UUID> expired = accounts.findExpiredDemoIds(time.now());
+        List<UUID> expired = accounts.findExpiredDemoIds(time.now(), PageRequest.of(0, CLEANUP_BATCH));
         if (expired.isEmpty()) {
             return 0;
         }

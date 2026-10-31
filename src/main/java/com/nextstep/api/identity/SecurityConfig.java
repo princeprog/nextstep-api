@@ -1,13 +1,12 @@
 package com.nextstep.api.identity;
 
-import java.io.IOException;
 import java.time.Clock;
+import java.time.Duration;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.ProviderManager;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -26,11 +25,9 @@ import org.springframework.security.web.csrf.CsrfException;
 import org.springframework.security.web.csrf.CsrfTokenRepository;
 import org.springframework.security.web.csrf.HttpSessionCsrfTokenRepository;
 
-import com.nextstep.api.common.ApiError;
-import com.nextstep.api.common.RequestIdFilter;
+import com.nextstep.api.common.ApiErrors;
+import com.nextstep.api.common.NextStepProperties;
 
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
 import tools.jackson.databind.ObjectMapper;
 
 @Configuration
@@ -38,9 +35,11 @@ import tools.jackson.databind.ObjectMapper;
 public class SecurityConfig {
 
     @Bean
-    public PasswordEncoder passwordEncoder() {
+    public PasswordEncoder passwordEncoder(NextStepProperties properties) {
         // Argon2id: 16-byte salt, 32-byte hash, parallelism 1, 19 MiB memory, 2 iterations (OWASP minimum profile).
-        return new Argon2PasswordEncoder(16, 32, 1, 19_456, 2);
+        // Only a few hashes run at once, so a burst of sign-in attempts can't exhaust the server's memory.
+        return new BoundedPasswordEncoder(new Argon2PasswordEncoder(16, 32, 1, 19_456, 2),
+                properties.getSecurity().getMaxConcurrentPasswordHashes(), Duration.ofSeconds(10));
     }
 
     @Bean
@@ -68,19 +67,20 @@ public class SecurityConfig {
                 .securityContext(context -> context.securityContextRepository(securityContextRepository))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(HttpMethod.GET, "/api/v1/auth/csrf", "/api/v1/openapi.yaml", "/actuator/health").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/auth/csrf", "/api/v1/openapi.yaml", "/api/v1/health",
+                                "/actuator/health", "/actuator/health/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/demo").permitAll()
                         .requestMatchers("/error").permitAll()
                         .anyRequest().authenticated())
                 .exceptionHandling(ex -> ex
-                        .authenticationEntryPoint((request, response, e) -> writeError(objectMapper, request, response,
+                        .authenticationEntryPoint((request, response, e) -> ApiErrors.write(objectMapper, request, response,
                                 HttpStatus.UNAUTHORIZED, "UNAUTHENTICATED", "Sign in to continue."))
                         .accessDeniedHandler((request, response, e) -> {
                             if (e instanceof CsrfException) {
-                                writeError(objectMapper, request, response, HttpStatus.FORBIDDEN, "CSRF_INVALID",
+                                ApiErrors.write(objectMapper, request, response, HttpStatus.FORBIDDEN, "CSRF_INVALID",
                                         "Your security token is missing or expired. Refresh and try again.");
                             } else {
-                                writeError(objectMapper, request, response, HttpStatus.FORBIDDEN, "FORBIDDEN",
+                                ApiErrors.write(objectMapper, request, response, HttpStatus.FORBIDDEN, "FORBIDDEN",
                                         "You don't have access to this action.");
                             }
                         }))
@@ -93,14 +93,4 @@ public class SecurityConfig {
                 .addFilterBefore(new DemoSessionFilter(clock, objectMapper), AnonymousAuthenticationFilter.class);
         return http.build();
     }
-
-    static void writeError(ObjectMapper objectMapper, HttpServletRequest request, HttpServletResponse response,
-                           HttpStatus status, String code, String message) throws IOException {
-        response.setStatus(status.value());
-        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        response.setHeader("Cache-Control", "no-store");
-        objectMapper.writeValue(response.getOutputStream(),
-                new ApiError(code, message, null, RequestIdFilter.current(request)));
-    }
 }
-

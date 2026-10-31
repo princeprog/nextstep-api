@@ -67,18 +67,23 @@ public class MeController {
                                                @RequestBody(required = false) JsonNode body,
                                                HttpServletRequest request, HttpServletResponse response) {
         requireNormal(principal);
+        // Counted before the breached-password lookup and the password hash, so simultaneous requests can't run past
+        // the limit. Only a wrong current password keeps its count.
+        countPasswordAttempt(principal);
         JsonInput in = JsonInput.of(body);
         String current = requiredPassword(in, "currentPassword", "Enter your current password.");
         String next = passwordPolicy.check(in, "newPassword", "Enter a new password.");
         if (current != null && current.equals(next)) {
             in.errors().add("newPassword", "Choose a password that's different from your current one.");
         }
-        in.errors().throwIfAny();
-        requirePasswordAttemptsLeft(principal);
+        if (!in.errors().isEmpty()) {
+            refundPasswordAttempt(principal);
+            in.errors().throwIfAny();
+        }
         if (!accountService.changePassword(principal.id(), current, next, request.getSession().getId())) {
-            recordWrongPassword(principal);
             throw ApiException.validation(Map.of("currentPassword", "That isn't your current password."));
         }
+        refundPasswordAttempt(principal);
         sessions.signIn(request, response, principal);
         return ResponseEntity.noContent().build();
     }
@@ -104,9 +109,8 @@ public class MeController {
         JsonInput in = JsonInput.of(body);
         String password = requiredPassword(in, "password", "Enter your password to confirm.");
         in.errors().throwIfAny();
-        requirePasswordAttemptsLeft(principal);
+        countPasswordAttempt(principal);
         if (!accountService.delete(principal.id(), password)) {
-            recordWrongPassword(principal);
             throw ApiException.validation(Map.of("password", "That password isn't correct."));
         }
         sessions.signOut(request);
@@ -129,14 +133,15 @@ public class MeController {
         return value;
     }
 
-    // Wrong passwords are counted outside the database transaction, so a rolled-back attempt still counts.
-    private void requirePasswordAttemptsLeft(AccountPrincipal principal) {
+    // Attempts are counted before the password is checked and outside the database transaction, so simultaneous
+    // requests can't slip past the limit and a rolled-back attempt still counts. A correct password takes its count back.
+    private void countPasswordAttempt(AccountPrincipal principal) {
         var limits = properties.getRateLimit();
-        rateLimiter.requireCapacity("password-check", principal.id().toString(), limits.getPasswordChecksPerWindow(),
+        rateLimiter.check("password-check", principal.id().toString(), limits.getPasswordChecksPerWindow(),
                 limits.getLoginWindow());
     }
 
-    private void recordWrongPassword(AccountPrincipal principal) {
-        rateLimiter.record("password-check", principal.id().toString(), properties.getRateLimit().getLoginWindow());
+    private void refundPasswordAttempt(AccountPrincipal principal) {
+        rateLimiter.refund("password-check", principal.id().toString(), properties.getRateLimit().getLoginWindow());
     }
 }

@@ -72,6 +72,7 @@ class PasswordResetTest extends IntegrationTestSupport {
         String first = TestMailbox.token(mailbox.await(email, "Reset your NextStep password"));
         b.post("/api/v1/auth/password-reset", map("email", email));
         String second = TestMailbox.token(mailbox.await(email, "Reset your NextStep password"));
+        awaitOutboxEmpty(email);
         assertThat(b.post("/api/v1/auth/password-reset/confirm", map("token", first, "password", NEW_PASSWORD)).code())
                 .isEqualTo("TOKEN_INVALID");
         clock.advance(Duration.ofMinutes(31));
@@ -103,5 +104,28 @@ class PasswordResetTest extends IntegrationTestSupport {
         assertThat(b.post("/api/v1/auth/password-reset/confirm", map("token", token, "password", NEW_PASSWORD)).status())
                 .isEqualTo(204);
         assertThat(signIn(email, NEW_PASSWORD).get("/api/v1/applications").status()).isEqualTo(200);
+    }
+
+    @Test
+    void aDeadLinkIsReportedBeforeThePasswordRules() {
+        TestBrowser b = browser();
+        b.refreshCsrf();
+        Response response = b.post("/api/v1/auth/password-reset/confirm", map("token", "x".repeat(43), "password", "short"));
+        assertThat(response.status()).isEqualTo(400);
+        assertThat(response.code()).as("someone with an expired link learns it before choosing a password")
+                .isEqualTo("TOKEN_INVALID");
+    }
+
+    @Test
+    void aResetRetiresUnusedConfirmationLinks() {
+        String email = uniqueEmail();
+        TestBrowser b = register(email, PASSWORD, "UTC");
+        String confirmation = TestMailbox.token(mailbox.await(email, "Confirm your email"));
+        b.post("/api/v1/auth/password-reset", map("email", email));
+        String reset = TestMailbox.token(mailbox.await(email, "Reset your NextStep password"));
+        assertThat(b.post("/api/v1/auth/password-reset/confirm", map("token", reset, "password", NEW_PASSWORD)).status())
+                .isEqualTo(204);
+        b.refreshCsrf();
+        assertThat(b.post("/api/v1/auth/verify-email", map("token", confirmation)).code()).isEqualTo("TOKEN_INVALID");
     }
 }

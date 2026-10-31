@@ -51,6 +51,7 @@ public class NextStepProperties {
         private int demoPerHour = 5;
         private int demoGlobalPerHour = 300;
         private int loginPerWindow = 10;
+        private int loginFailuresPerEmailPerWindow = 50;
         private Duration loginWindow = Duration.ofMinutes(15);
         private int registerPerHour = 10;
         private int registerPerEmailPerHour = 5;
@@ -64,8 +65,15 @@ public class NextStepProperties {
         public void setDemoPerHour(int demoPerHour) { this.demoPerHour = demoPerHour; }
         public int getDemoGlobalPerHour() { return demoGlobalPerHour; }
         public void setDemoGlobalPerHour(int demoGlobalPerHour) { this.demoGlobalPerHour = demoGlobalPerHour; }
+        /** Failed sign-ins per client address per window. */
         public int getLoginPerWindow() { return loginPerWindow; }
         public void setLoginPerWindow(int loginPerWindow) { this.loginPerWindow = loginPerWindow; }
+        /**
+         * Failed sign-ins per email per window, from any address. Much higher than the per-address limit, so one
+         * attacker can't lock an owner out, while guessing from many addresses is still slowed down.
+         */
+        public int getLoginFailuresPerEmailPerWindow() { return loginFailuresPerEmailPerWindow; }
+        public void setLoginFailuresPerEmailPerWindow(int value) { this.loginFailuresPerEmailPerWindow = value; }
         public Duration getLoginWindow() { return loginWindow; }
         public void setLoginWindow(Duration loginWindow) { this.loginWindow = loginWindow; }
         public int getRegisterPerHour() { return registerPerHour; }
@@ -106,7 +114,10 @@ public class NextStepProperties {
         /** log (local development: write emails to the log) or smtp (any provider's SMTP service). */
         private String mode = "log";
         private String from = "NextStep <no-reply@localhost>";
-        /** Emails sent across all accounts per hour; the rest wait in the outbox. */
+        /**
+         * Emails sent across all accounts per hour; the rest wait in the outbox. Requests that queue an email
+         * (registration, resends, and reset requests) are capped at the same rate, so the queue can't grow without end.
+         */
         private int globalPerHour = 200;
 
         public String getMode() { return mode; }
@@ -124,6 +135,10 @@ public class NextStepProperties {
         private Duration unverifiedTtl = Duration.ofDays(7);
         /** Must be longer than the backup retention, so deletions can be re-applied after any restore. */
         private Duration deletionLedgerRetention = Duration.ofDays(35);
+        /** Records one normal account may hold, so one account can't fill the database or make its export huge. */
+        private int maxApplications = 2_000;
+        private int maxTasks = 10_000;
+        private int maxInterviews = 2_000;
 
         public Duration getVerificationTtl() { return verificationTtl; }
         public void setVerificationTtl(Duration verificationTtl) { this.verificationTtl = verificationTtl; }
@@ -133,6 +148,12 @@ public class NextStepProperties {
         public void setUnverifiedTtl(Duration unverifiedTtl) { this.unverifiedTtl = unverifiedTtl; }
         public Duration getDeletionLedgerRetention() { return deletionLedgerRetention; }
         public void setDeletionLedgerRetention(Duration value) { this.deletionLedgerRetention = value; }
+        public int getMaxApplications() { return maxApplications; }
+        public void setMaxApplications(int maxApplications) { this.maxApplications = maxApplications; }
+        public int getMaxTasks() { return maxTasks; }
+        public void setMaxTasks(int maxTasks) { this.maxTasks = maxTasks; }
+        public int getMaxInterviews() { return maxInterviews; }
+        public void setMaxInterviews(int maxInterviews) { this.maxInterviews = maxInterviews; }
     }
 
     public static class Passwords {

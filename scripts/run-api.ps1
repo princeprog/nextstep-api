@@ -4,8 +4,8 @@
   Loads the generated database password from %LOCALAPPDATA%\NextStep\dev-db.json into this process only.
 
 .PARAMETER RelaxedLimits
-  Raises the demo, registration, and login rate limits for local end-to-end test runs, which create many
-  accounts and demos from the same address. Never use this for a shared or public deployment.
+  Raises the demo, registration, sign-in, email-request, link, and hourly email limits for local end-to-end test runs,
+  which create many accounts and demos from the same address. Never use this for a shared or public deployment.
 
 .PARAMETER Mailpit
   Sends email over SMTP to a local Mailpit (127.0.0.1:1025, inbox at http://127.0.0.1:8025) instead of writing it to
@@ -27,6 +27,7 @@ if ($RelaxedLimits) {
     $env:LOGIN_RATE_LIMIT_PER_WINDOW = '1000'
     $env:EMAIL_REQUEST_RATE_LIMIT_PER_HOUR = '1000'
     $env:LINK_RATE_LIMIT_PER_WINDOW = '1000'
+    $env:EMAIL_GLOBAL_LIMIT_PER_HOUR = '100000'
 }
 if ($Mailpit) {
     $env:MAIL_MODE = 'smtp'

@@ -38,7 +38,9 @@ paths:
       description: |
         Answers 202 with the same body whether or not the email already has an account, so registration doesn't reveal
         which emails are registered. A new account starts unverified and no session is created; the person signs in
-        after confirming the email. An existing account doesn't change; its owner is emailed instead.
+        after confirming the email. A confirmed account doesn't change; its owner is emailed instead. An unconfirmed
+        account takes the newest registration's name, password, and time zone, and gets a new link. Answers 429 when
+        this address or email is over its limit, or when every visitor together has queued an hour's worth of email.
       security: []
       requestBody:
         required: true
@@ -59,6 +61,10 @@ paths:
     post:
       tags: [Auth]
       summary: Sign in with email and password
+      description: |
+        An account whose email isn't confirmed yet gets the same 401 INVALID_CREDENTIALS as a wrong password, so
+        registering and then signing in reveals nothing about other people's accounts. Failed attempts are limited per
+        client address and, more loosely, per email; successful sign-ins don't count.
       security: []
       requestBody:
         required: true
@@ -620,7 +626,7 @@ components:
       properties:
         code:
           type: string
-          description: Stable code such as VALIDATION_ERROR, NOT_FOUND, UNAUTHENTICATED, CSRF_INVALID, DEMO_EXPIRED, APPLICATION_ARCHIVED, RATE_LIMITED, INVALID_QUERY, PAYLOAD_TOO_LARGE, BUSY, EMAIL_NOT_VERIFIED, TOKEN_INVALID, DEMO_ACCOUNT
+          description: Stable code such as VALIDATION_ERROR, NOT_FOUND, UNAUTHENTICATED, INVALID_CREDENTIALS, CSRF_INVALID, DEMO_EXPIRED, APPLICATION_ARCHIVED, RATE_LIMITED, INVALID_QUERY, PAYLOAD_TOO_LARGE, BUSY, EMAIL_NOT_VERIFIED, TOKEN_INVALID, DEMO_ACCOUNT, DEMO_LIMIT_REACHED, ACCOUNT_LIMIT_REACHED
         message: { type: string }
         fieldErrors:
           type: object

@@ -47,10 +47,26 @@ Product requirements, rules, and decisions live in the owner's local Obsidian va
 - Request bodies are read through `JsonInput`, which keeps an omitted field distinct from an explicit null and rejects
   control characters. Use the `Validators` helpers so single-line fields stay single-line. Validate the merged record.
 - Rate limits go through `RateLimiter` (shared through PostgreSQL); never add in-memory counters. Keys are hashed by
-  `IdentifierHasher`, so never store raw client addresses or emails.
+  `IdentifierHasher`, so never store raw client addresses or emails. Count an attempt with `check` before doing the
+  expensive or sensitive work (a password hash, a lookup), and `refund` it on success when only failures should count;
+  a "peek, then record" pair lets simultaneous requests slip past the limit. Use `ClientAddress` for the client key
+  (IPv6 is grouped by /64).
 - Scheduled work must run through `ClusterJobLock` so only one API instance runs it at a time, and should work in bounded batches.
-- Schema changes go in a new Flyway migration (`V3__...sql` next); never edit, rename, or delete one that is on `main`
+- Schema changes go in a new Flyway migration (`V4__...sql` next); never edit, rename, or delete one that is on `main`
   (CI enforces it). Follow "Releasing a migration" in the README.
+- Account flows must not reveal whether an email has an account: registration, resend, and reset requests answer the
+  same way and do the same work either way. Keep it that way, and keep their per-address and per-email limits.
+  Sign-in to an unconfirmed account must keep failing exactly like a wrong password. Requests that queue email must call
+  the shared email intake limit (`AuthController.limitEmailIntake`).
+- Links are created with `AccountTokens` (single-use, expiring, stored as a hash, token in the URL fragment). Queue email
+  through `AccountEmails`; never send from a request thread, never store a raw token, and never put text a user typed
+  into an email. Older links are retired only after the replacement email is sent (`retireOthers`), so a failed send
+  never breaks a delivered link.
+- Email addresses are validated with `Validators.isEmail` (bare addresses only); don't loosen it.
+- `EmailVerificationGate` is a second line of defense for sessions of unconfirmed accounts (none should exist). New
+  endpoints are blocked by it; extend its allow list only for self-service account actions.
+- Creating records must respect the per-account caps (`nextstep.accounts.max-*`) as well as the demo caps.
+- Anything that deletes an account must record it in `DeletionLedger` so a restore can apply the deletion again.
 - Endpoint changes must update `openapi/openapi.yaml` (`OpenApiContractTest` enforces it). Then regenerate app types with
   `pnpm api:types` in nextstep-app.
 - Don't log request bodies, passwords, session or CSRF values, email addresses, client addresses, notes, or contact details.
@@ -70,5 +86,5 @@ runs the dependency and secret scans described in the README.
 ## Don'ts
 
 - No production deployment, external services, or real personal data without an explicit request from the owner.
-- Don't claim production readiness: email verification, password reset, hosting, retention, and the privacy policy are
-  still open decisions.
+- Don't claim production readiness: hosting, the email provider, retention, and the final privacy policy are still open
+  decisions.

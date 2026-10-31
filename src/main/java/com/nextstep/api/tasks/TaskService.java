@@ -68,6 +68,10 @@ public class TaskService {
         if (owner.isDemo() && tasks.countByOwnerId(owner.id()) >= properties.getDemo().getMaxTasks()) {
             throw ApiException.conflict("DEMO_LIMIT_REACHED", "This demo has reached its task limit.");
         }
+        if (!owner.isDemo() && tasks.countByOwnerId(owner.id()) >= properties.getAccounts().getMaxTasks()) {
+            throw ApiException.conflict("ACCOUNT_LIMIT_REACHED", "This account has reached its limit of "
+                    + properties.getAccounts().getMaxTasks() + " tasks. Delete some to add more.");
+        }
         Task task = new Task();
         task.setOwnerId(owner.id());
         task.setApplicationId(applicationId);

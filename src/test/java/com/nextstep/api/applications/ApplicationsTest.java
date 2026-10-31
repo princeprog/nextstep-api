@@ -6,12 +6,34 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.time.Instant;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 
+import com.nextstep.api.common.NextStepProperties;
 import com.nextstep.api.support.IntegrationTestSupport;
 import com.nextstep.api.support.TestBrowser;
 import com.nextstep.api.support.TestBrowser.Response;
 
 class ApplicationsTest extends IntegrationTestSupport {
+
+    @Autowired
+    NextStepProperties properties;
+
+    @Test
+    void aNormalAccountHasARecordLimit() {
+        TestBrowser b = signedInUser();
+        int original = properties.getAccounts().getMaxApplications();
+        properties.getAccounts().setMaxApplications(2);
+        try {
+            createApplication(b);
+            createApplication(b);
+            Response refused = b.post("/api/v1/applications", map("company", "Third Co", "jobTitle", "Engineer"));
+            assertThat(refused.status()).isEqualTo(409);
+            assertThat(refused.code()).isEqualTo("ACCOUNT_LIMIT_REACHED");
+            assertThat(refused.text("message")).contains("2 applications");
+        } finally {
+            properties.getAccounts().setMaxApplications(original);
+        }
+    }
 
     @Test
     void createValidatesFieldsAndKeepsPlainTextNotes() {

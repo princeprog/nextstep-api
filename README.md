@@ -4,8 +4,9 @@ Spring Boot REST API for **NextStep**, a portfolio job-application tracker. It o
 ownership checks, validation, business rules (statuses, archive, time zones, due states), search, the dashboard, and the
 temporary demo workspace. Data is stored in PostgreSQL.
 
-> Portfolio MVP. Email verification, password reset, hosting, backup and log retention, and a production privacy policy
-> are still open, so this API is not ready to hold real users' job searches. Nothing is deployed.
+> Portfolio MVP. Email verification, password reset and change, data export, and recorded account deletion are built.
+> Hosting, the email provider, backup and log retention, and the final privacy policy are still open, so this API is not
+> yet serving real users. Nothing is deployed.
 
 ## Related projects
 
@@ -59,6 +60,15 @@ All values have local defaults in `src/main/resources/application.properties`. S
 | `COOKIE_SECURE` | Mark the session cookie Secure (the production profile always does) | `false` |
 | `SERVER_ADDRESS` / `PORT` | Bind address and port | `127.0.0.1` / `8080` (production: `0.0.0.0`) |
 | `APP_PUBLIC_ORIGIN` | Public origin of the web app. Reserved for links in emails; must be a public https origin in production | `http://localhost:3000` |
+| `MAIL_MODE` | `log` writes emails, including their links, to the log (local only); `smtp` sends through any provider. Production requires `smtp` | `log` |
+| `MAIL_FROM` | Sender, for example `NextStep <no-reply@your-domain>` | `NextStep <no-reply@localhost>` |
+| `MAIL_HOST` / `MAIL_PORT` / `MAIL_USERNAME` / `MAIL_PASSWORD` | The provider's SMTP service (STARTTLS required by default) | empty / `587` / empty / empty |
+| `MAIL_SMTP_AUTH` / `MAIL_STARTTLS` | Turn off only for a relay on this machine, such as Mailpit; production refuses plain SMTP to any other host | `true` / `true` |
+| `EMAIL_GLOBAL_LIMIT_PER_HOUR` | Emails sent across all accounts per hour; the rest wait in the outbox. Requests that queue email (registration, resends, reset requests) share the same hourly cap, and get 429 beyond it. Set it within the email provider's plan | `200` |
+| `PASSWORD_BREACH_CHECK` | Reject new passwords found in Have I Been Pwned (k-anonymity; allowed if the service is down) | `true` |
+| `UNVERIFIED_ACCOUNT_TTL` | Accounts never verified within this time are deleted | `P7D` |
+| `DELETION_LEDGER_RETENTION` | How long deleted account IDs are kept for re-applying deletions after a restore; keep it longer than the backup retention | `P35D` |
+| `MAX_APPLICATIONS_PER_ACCOUNT` / `MAX_TASKS_PER_ACCOUNT` / `MAX_INTERVIEWS_PER_ACCOUNT` | Records one normal account may hold; past them, creating one answers 409 `ACCOUNT_LIMIT_REACHED` | `2000` / `10000` / `2000` |
 | `IDENTIFIER_HASH_KEY` | Key for hashing client addresses and emails in rate-limit rows. Required in production (32+ characters) and shared by every instance | random per process |
 | `MAX_CONCURRENT_PASSWORD_HASHES` | Argon2id hashes allowed at once (about 19 MiB each); others wait up to 10 s, then get 503 `BUSY` | `4` |
 | `MAX_REQUEST_BYTES` | Largest accepted request body | `262144` |
@@ -69,20 +79,72 @@ All values have local defaults in `src/main/resources/application.properties`. S
 | `DEMO_RATE_LIMIT_PER_HOUR` | Demo starts per client address per hour | `5` |
 | `DEMO_GLOBAL_RATE_LIMIT_PER_HOUR` | Demo starts across all visitors per hour | `300` |
 | `REGISTER_RATE_LIMIT_PER_HOUR` | Registrations per client address per hour | `10` |
-| `LOGIN_RATE_LIMIT_PER_WINDOW` | Sign-in attempts per address per 15 minutes; also failed attempts per email | `10` |
+| `REGISTER_EMAIL_RATE_LIMIT_PER_HOUR` | Registrations per email address per hour | `5` |
+| `EMAIL_REQUEST_RATE_LIMIT_PER_HOUR` / `EMAIL_REQUEST_EMAIL_RATE_LIMIT_PER_HOUR` | Verification resends and reset requests, per client address / per email address | `10` / `3` |
+| `LINK_RATE_LIMIT_PER_WINDOW` | Verification and reset link submissions per client address per 15 minutes | `30` |
+| `PASSWORD_CHECK_RATE_LIMIT_PER_WINDOW` | Wrong current passwords (password change, deletion) per account per 15 minutes | `5` |
+| `EXPORT_RATE_LIMIT_PER_HOUR` | Data exports per account per hour | `10` |
+| `LOGIN_RATE_LIMIT_PER_WINDOW` | Failed sign-ins per client address per 15 minutes | `10` |
+| `LOGIN_EMAIL_RATE_LIMIT_PER_WINDOW` | Failed sign-ins per email per 15 minutes, from any address | `50` |
 
 Rate limits live in PostgreSQL (`rate_limit_counters`), so every API instance enforces the same limits. Rows hold only
-keyed HMAC-SHA256 digests of client addresses and emails, never the values. For an email, only failed sign-ins count, so an
-owner's own sign-ins never lock them out. Client addresses come from `X-Forwarded-For` only when the immediate peer is a
-trusted proxy (private, loopback, or link-local addresses by default; override the pattern with
-`SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES`).
+keyed HMAC-SHA256 digests of client addresses and emails, never the values. Each attempt is counted before the password is
+checked, so simultaneous requests can't slip past a limit, and a successful attempt takes its count back: only failures
+use up an allowance. The per-email sign-in allowance is five times the per-address one, so one attacker can't lock an
+owner out, and a password reset clears it. IPv6 clients share one limit per /64 network. Client addresses come from
+`X-Forwarded-For` only when the immediate peer is a trusted proxy (private, loopback, or link-local addresses by default;
+override the pattern with `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES`).
+
+The app forwards `/api/v1` requests with the browser's headers unchanged and adds no `X-Forwarded-For` of its own, so the
+address the API sees is whatever the proxy in front of the app puts there. That proxy must replace the header with the
+connecting client's address, or append that address to it (hosting providers' edges and Caddy do), and `next start` must
+never be reachable directly. Otherwise a client could send its own `X-Forwarded-For` and get a fresh allowance on every
+request. The staging test in nextstep-app checks this (see "Deploy" below).
 
 ### Production profile
 
 `SPRING_PROFILES_ACTIVE=production` binds `0.0.0.0`, always sets the Secure flag on the session cookie and names it
 `__Host-NEXTSTEP_SESSION` (bound to the app's HTTPS origin), and writes ECS JSON logs to standard output. It refuses to start
 when `APP_PUBLIC_ORIGIN` is not a public https origin, `IDENTIFIER_HASH_KEY` is missing or shorter than 32 characters,
-`DATABASE_PASSWORD` is empty, or rate limits are set to local test values. The error names the setting, never its value.
+`DATABASE_PASSWORD` is empty, `MAIL_MODE` isn't `smtp`, `MAIL_HOST` or a real `MAIL_FROM` is missing, SMTP without STARTTLS or
+authentication goes to a host other than this machine, or any rate limit is set to a local test value. The error names the
+setting, never its value.
+
+## Accounts and email
+
+- **Registration** answers `202` with the same body whether or not the email already has an account, so it never reveals
+  which addresses are registered. It starts no session. A new account is unverified until its emailed link is used; an
+  existing confirmed account doesn't change, and its owner gets an "account already exists" email instead. An account that
+  is still unconfirmed takes the newest registration's name, password, and time zone, and gets a new link.
+- **Unconfirmed accounts can't sign in.** The answer is the same `401 INVALID_CREDENTIALS` as a wrong password; otherwise
+  registering an address and signing in with the chosen password would show whether the address already had an account.
+  As a second line of defense, `EmailVerificationGate` limits any session of an unconfirmed account to `GET` and
+  `DELETE /me`, `GET /me/export`, and the auth endpoints (`403 EMAIL_NOT_VERIFIED` elsewhere). Accounts never verified are
+  deleted after `UNVERIFIED_ACCOUNT_TTL`. Accounts that existed before verification was added count as verified.
+- **Email addresses** must be bare addresses in the form browsers accept for `type="email"`, with a dot in the domain.
+  Names, comments, quotes, and angle brackets are refused, and the SMTP sender also refuses any recipient with a display name.
+- **Links** are 32 random bytes, single-use, and expire (24 hours to verify, 30 minutes to reset). Only a SHA-256 hash is
+  stored, and the token travels in the URL fragment (`/verify-email#token=…`, `/reset-password#token=…`), so it never
+  reaches server or proxy logs. Only the newest delivered link of a kind works: older links are retired once the email with
+  the new one has been sent, so a failed send never breaks the link already in the inbox.
+- **Password reset** answers the same for unknown emails and is limited per address and per email. Confirming checks the
+  link before the new password, signs the account out everywhere, verifies the email (retiring unused confirmation links),
+  and clears the email's failed sign-ins. **Password change** re-checks the current password, ends every other session,
+  and rotates this one. New passwords need 12–128 characters and must not appear in Pwned Passwords; the lookup must finish,
+  body included, within 3 seconds and stay under 256 KiB, or the password is allowed.
+- **Export**: `GET /me/export` downloads every record the account owns as JSON (`nextstep-export/1`).
+- **Deletion** needs the password. It deletes the account, its records, and its sessions; emails a notice; and records the
+  account ID in `account_deletions`, so the deletion can be applied again after an older backup is restored.
+- **Email delivery** goes through the `email_outbox` table: sent right after the request commits on the outbox's own
+  thread, retried with backoff (up to 6 attempts), capped per hour, and claimed with `SKIP LOCKED` so instances never
+  double-send. A run stops at the first failed send, so a provider outage costs one timeout per run. Requests that queue
+  email share the same hourly cap, so the queue can't outgrow an hour of sending. Links are created at send time, so the
+  outbox never holds a usable token. Emails never contain text a user typed.
+- **Record caps**: a normal account holds at most 2,000 applications, 10,000 tasks, and 2,000 interviews (settings above),
+  which also bounds the size of its export.
+- **Locally**, `MAIL_MODE=log` prints each email and its link to the API log. To receive real SMTP mail locally, run
+  [Mailpit](https://mailpit.axllent.org/) (`mailpit --listen 127.0.0.1:8025 --smtp 127.0.0.1:1025`) and start the API with
+  `.\scripts\run-api.ps1 -Mailpit`; the inbox is at http://127.0.0.1:8025.
 
 ### Health checks
 
@@ -116,17 +178,22 @@ Key behavior:
 ## Build and test
 
 ```powershell
-.\mvnw.cmd verify                       # compiles, runs all 57 tests, builds target\nextstep-api-0.0.1-SNAPSHOT.jar
+.\mvnw.cmd verify                       # compiles, runs all 99 tests, builds target\nextstep-api-0.0.1-SNAPSHOT.jar
 .\mvnw.cmd test "-Dtest=TaskTimeRulesTest"
-.\scripts\db-backup-smoke.ps1           # local pg_dump/pg_restore round trip with row-count comparison (fictional data only)
+.\scripts\db-backup-smoke.ps1           # backup and restore drill on a quiet local database (fictional data only)
 ```
 
 Tests start their own temporary PostgreSQL cluster (random free port on 127.0.0.1, generated password) and delete only
 that cluster's temporary directory when the JVM exits. They cover sign-in and sessions, CSRF, cookie attributes and
-security headers under the production profile, rate limits (including limits shared between two running API instances),
+security headers under the production profile, registration that reveals nothing, email verification and password reset
+link lifecycles, session invalidation after a reset or password change, the breached-password check, data export,
+deletion and its re-application after a restore, email retries, rate limits (including limits shared between two running API instances),
 ownership isolation, validation and PATCH semantics, input limits, archive/restore, search and pagination, time-zone and
 daylight-saving rules, interview windows, demo isolation, expiry, cleanup and its cross-instance lock, and the OpenAPI
 contract.
+
+The backup drill (`db-backup-smoke.ps1`) dumps a database, restores it into a scratch database, compares every table's
+row count and content checksum, re-applies a recorded deletion in the restored copy, and drops the scratch database.
 
 **Windows note:** on some machines the JDK can't create the Unix-domain socket NIO uses internally when its file lives
 under the user profile ("Unable to establish loopback connection"). A Maven profile that activates on Windows points
@@ -163,18 +230,77 @@ gitleaks git . --redact
   Flyway's lock makes concurrent instances wait for the first one. Recover from a bad migration by shipping a new forward
   migration, or by restoring the backup.
 
+## Operations runbooks
+
+These steps don't depend on a particular host; the host's own console replaces the shell commands where it offers them.
+
+**Deploy**
+
+1. Confirm CI is green on `main`.
+2. If the release contains a migration, take a backup first (host snapshot, or `pg_dump --format=custom --no-owner`).
+3. Deploy the API with `SPRING_PROFILES_ACTIVE=production` and secrets from the host's secret manager. Start one instance
+   first when there is a migration; the others wait on Flyway's lock.
+4. Check `/actuator/health/readiness` on the API and `GET /api/v1/health` through the app's origin.
+5. Deploy the app (built with `API_ORIGIN` pointing at the API, run with `APP_HTTPS=true`), then sign in, open the
+   dashboard, and sign out.
+6. After the first deploy on a new host, confirm per-address limits see the real client address. From nextstep-app, run
+   `$env:STAGING_URL = "https://<app origin>"; pnpm test:staging -g "per-address"`. It sends sign-in attempts that
+   each claim a different `X-Forwarded-For` address and expects the limit to stop them, so it also uses up your own
+   address's sign-in allowance for 15 minutes.
+
+**Monitor**
+
+- Uptime: an external monitor requests `https://<app origin>/api/v1/health` every minute and alerts after two failures
+  in a row. One request covers TLS, the proxy, the app, the API, and the database. A second check requests the website's
+  home page.
+- Host probes: liveness `/actuator/health/liveness` and readiness `/actuator/health/readiness` on the API's own port.
+- Log alerts: any `ERROR` entry (for example `Unexpected error on …` or `Gave up on a … email after 6 attempts`), and the
+  warning `The hourly email limit is reached`, which means sign-up and reset emails are being delayed.
+- The monitoring provider is still to be chosen; these checks need only HTTP probes and log-based alerts.
+
+**Roll back**
+
+- Redeploy the previous build of the app or API. Migrations stay in place, and the expand-then-contract rule means the
+  previous version still works with the newer schema.
+- For a migration that damaged data, ship a forward fix, or restore a backup as below.
+
+**Restore a backup**
+
+1. If the current database is still reachable, save its deletion records first:
+   `\copy (SELECT account_id, deleted_at, reason FROM account_deletions) TO 'deletions.csv' CSV` in psql. If it isn't, take
+   the `Deleted account <id>` lines from the API logs for the time since the backup.
+2. Restore the backup into a new database (the host's restore, or `pg_restore --no-owner --exit-on-error`).
+3. Load the saved records into the restored database:
+   `CREATE TEMP TABLE d (LIKE account_deletions); \copy d FROM 'deletions.csv' CSV`, then
+   `INSERT INTO account_deletions SELECT * FROM d ON CONFLICT DO NOTHING;`.
+4. Run `SELECT nextstep_reapply_deletions();`, which deletes every recorded account again, with its records and sessions.
+5. Point the API at the restored database and check health. Sessions created after the backup are gone, so people sign
+   in again.
+6. Rehearse steps 2–4 with `.\scripts\db-backup-smoke.ps1`.
+
+**Rotate secrets**
+
+- `DATABASE_PASSWORD`: `ALTER ROLE … PASSWORD …`, update the secret, and restart instances one at a time.
+- `IDENTIFIER_HASH_KEY`: update it for every instance and restart them together. Existing rate-limit counters stop
+  matching, so limits start fresh; nothing else depends on it.
+- `MAIL_PASSWORD`: create a new SMTP credential at the provider, update the secret, restart, then revoke the old one.
+- To sign everyone out (for example after a suspected leak), run `TRUNCATE spring_session CASCADE;`.
+
 ## Project layout
 
 ```
 src/main/java/com/nextstep/api/
   common/        errors, validation, request limits, shared rate limiting, job locks, health, time rules, clock
-  identity/      accounts, Spring Security, sessions, password hashing, auth and profile endpoints
+  identity/      accounts, Spring Security, sessions, passwords, verification and reset links, account email outbox,
+                 export, deletion records, auth and profile endpoints
+  mail/          email sending (log mode and SMTP)
   applications/  application records, status, archive, search
   tasks/         tasks and due states
   interviews/    interview records
   dashboard/     dashboard aggregates
   demo/          demo seeding and expired-demo cleanup
-src/main/resources/db/migration/   Flyway migrations (schema, Spring Session tables, rate-limit counters)
+src/main/resources/db/migration/   Flyway migrations (schema, Spring Session tables, rate-limit counters, link tokens,
+                                   email outbox, deletion records)
 openapi/openapi.yaml               published contract
 scripts/                           local database, run, and backup scripts
 .github/                           CI, security scanning, Dependabot

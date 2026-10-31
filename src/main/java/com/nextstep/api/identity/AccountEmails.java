@@ -33,7 +33,9 @@ import jakarta.annotation.PreDestroy;
  * Account emails go through an outbox table, so a request never waits on the mail provider and a provider outage only
  * delays mail. Emails are sent right after the request's transaction commits, and every 30 seconds for retries.
  * Rows are claimed with SKIP LOCKED, so several API instances never send the same email twice. Links are created
- * when an email is sent; the outbox never holds a usable token.
+ * when an email is sent; the outbox never holds a usable token. Sending always happens on the outbox's own thread, and
+ * a run stops at the first failure, so a mail provider outage costs one timeout per run and never holds up the
+ * scheduler's other jobs.
  */
 @Component
 public class AccountEmails {
@@ -46,6 +48,17 @@ public class AccountEmails {
     private static final Logger log = LoggerFactory.getLogger(AccountEmails.class);
 
     private record Row(UUID id, Kind kind, UUID accountId, String recipient, int attempts) {
+    }
+
+    private record BatchResult(int handled, boolean stop) {
+    }
+
+    /** An email ready to send, and the link token it carries, if any. */
+    private record Composed(EmailMessage message, AccountTokens.Purpose purpose, AccountTokens.Issued link) {
+
+        Composed(EmailMessage message) {
+            this(message, null, null);
+        }
     }
 
     private final JdbcTemplate jdbc;
@@ -116,27 +129,26 @@ public class AccountEmails {
 
     @Scheduled(initialDelayString = "PT10S", fixedDelayString = "${nextstep.mail.poll-interval:PT30S}")
     void retry() {
-        try {
-            sendDue();
-        } catch (RuntimeException ex) {
-            log.warn("Sending queued email failed ({})", ex.getClass().getSimpleName());
-        }
+        sendSoon();
     }
 
-    /** Sends every due email in batches; returns how many rows were handled. */
+    /** Sends due emails in batches until none are left or one fails; returns how many rows were handled. */
     public int sendDue() {
         int handled = 0;
         for (int batch = 0; batch < MAX_BATCHES_PER_RUN; batch++) {
-            Integer count = transactions.execute(status -> sendBatch());
-            if (count == null || count == 0) {
+            BatchResult result = transactions.execute(status -> sendBatch());
+            if (result == null) {
                 break;
             }
-            handled += count;
+            handled += result.handled();
+            if (result.stop() || result.handled() == 0) {
+                break;
+            }
         }
         return handled;
     }
 
-    private int sendBatch() {
+    private BatchResult sendBatch() {
         Instant now = clock.instant();
         List<Row> due = jdbc.query("""
                 SELECT id, kind, account_id, recipient, attempts FROM email_outbox
@@ -149,21 +161,35 @@ public class AccountEmails {
                 rateLimiter.requireCapacity("email-global", "all", properties.getMail().getGlobalPerHour(), Duration.ofHours(1));
             } catch (ApiException capReached) {
                 log.warn("The hourly email limit is reached; queued emails will be sent later");
-                return handled;
+                return new BatchResult(handled, true);
             }
+            Composed composed = null;
+            boolean sent = false;
             try {
-                EmailMessage message = compose(row);
-                if (message != null) {
-                    sender.send(message);
+                composed = compose(row);
+                if (composed != null) {
+                    sender.send(composed.message());
+                    sent = true;
                     rateLimiter.record("email-global", "all", Duration.ofHours(1));
+                    if (composed.link() != null) {
+                        // Only now does the new link replace the older ones, so a failed send never breaks a link
+                        // that is already in the inbox.
+                        tokens.retireOthers(row.accountId(), composed.purpose(), composed.link().id());
+                    }
                 }
                 jdbc.update("DELETE FROM email_outbox WHERE id = ?", row.id());
             } catch (RuntimeException ex) {
+                if (!sent && composed != null && composed.link() != null) {
+                    tokens.discard(composed.link().id());
+                }
+                // The rest of the batch would most likely fail the same way (the provider is down or refusing), so
+                // the next run tries again.
                 fail(row, now, ex);
+                return new BatchResult(handled + 1, true);
             }
             handled++;
         }
-        return handled;
+        return new BatchResult(handled, false);
     }
 
     private void fail(Row row, Instant now, RuntimeException ex) {
@@ -190,9 +216,9 @@ public class AccountEmails {
     }
 
     /** Builds the email, or returns null when it is no longer needed (for example the email was verified meanwhile). */
-    private EmailMessage compose(Row row) {
+    private Composed compose(Row row) {
         if (row.kind() == Kind.ACCOUNT_DELETED) {
-            return AccountEmailTemplates.accountDeleted(row.recipient());
+            return new Composed(AccountEmailTemplates.accountDeleted(row.recipient()));
         }
         Account account = accounts.findById(row.accountId()).orElse(null);
         if (account == null || account.getEmail() == null) {
@@ -201,19 +227,27 @@ public class AccountEmails {
         String origin = properties.getAppPublicOrigin();
         NextStepProperties.Accounts settings = properties.getAccounts();
         return switch (row.kind()) {
-            case VERIFY_EMAIL -> account.getEmailVerifiedAt() != null ? null : AccountEmailTemplates.verifyEmail(
-                    account.getEmail(),
-                    origin + "/verify-email#token=" + tokens.issue(account.getId(), AccountTokens.Purpose.VERIFY_EMAIL,
-                            settings.getVerificationTtl()),
-                    settings.getVerificationTtl());
-            case ACCOUNT_EXISTS -> AccountEmailTemplates.accountExists(account.getEmail(), origin + "/login",
-                    origin + "/forgot-password");
-            case RESET_PASSWORD -> AccountEmailTemplates.resetPassword(
-                    account.getEmail(),
-                    origin + "/reset-password#token=" + tokens.issue(account.getId(), AccountTokens.Purpose.RESET_PASSWORD,
-                            settings.getResetTtl()),
-                    settings.getResetTtl());
-            case PASSWORD_CHANGED -> AccountEmailTemplates.passwordChanged(account.getEmail(), origin + "/forgot-password");
+            case VERIFY_EMAIL -> {
+                if (account.getEmailVerifiedAt() != null) {
+                    yield null;
+                }
+                AccountTokens.Issued link = tokens.issue(account.getId(), AccountTokens.Purpose.VERIFY_EMAIL,
+                        settings.getVerificationTtl());
+                yield new Composed(AccountEmailTemplates.verifyEmail(account.getEmail(),
+                        origin + "/verify-email#token=" + link.token(), settings.getVerificationTtl()),
+                        AccountTokens.Purpose.VERIFY_EMAIL, link);
+            }
+            case ACCOUNT_EXISTS -> new Composed(AccountEmailTemplates.accountExists(account.getEmail(), origin + "/login",
+                    origin + "/forgot-password"));
+            case RESET_PASSWORD -> {
+                AccountTokens.Issued link = tokens.issue(account.getId(), AccountTokens.Purpose.RESET_PASSWORD,
+                        settings.getResetTtl());
+                yield new Composed(AccountEmailTemplates.resetPassword(account.getEmail(),
+                        origin + "/reset-password#token=" + link.token(), settings.getResetTtl()),
+                        AccountTokens.Purpose.RESET_PASSWORD, link);
+            }
+            case PASSWORD_CHANGED -> new Composed(AccountEmailTemplates.passwordChanged(account.getEmail(),
+                    origin + "/forgot-password"));
             case ACCOUNT_DELETED -> throw new IllegalStateException("handled above");
         };
     }

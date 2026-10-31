@@ -4,7 +4,11 @@ import static com.nextstep.api.support.TestBrowser.map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.Map;
+import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -60,6 +64,44 @@ class EmailOutboxTest extends IntegrationTestSupport {
         Integer count = jdbc.queryForObject("SELECT count(*) FROM email_outbox WHERE account_id = CAST(? AS uuid)",
                 Integer.class, accountId);
         return count == null ? 0 : count;
+    }
+
+    @Test
+    void aRunStopsAtTheFirstFailedSend() {
+        String failing = uniqueEmail();
+        String working = uniqueEmail();
+        registerVerified(failing, PASSWORD, "UTC");
+        registerVerified(working, PASSWORD, "UTC");
+        awaitOutboxEmpty(failing);
+        awaitOutboxEmpty(working);
+        String failingId = jdbc.queryForObject("SELECT id::text FROM accounts WHERE email = ?", String.class, failing);
+        String workingId = jdbc.queryForObject("SELECT id::text FROM accounts WHERE email = ?", String.class, working);
+        clock.set(Instant.parse("2033-01-01T00:00:00Z"));
+        emails.sendDue(); // anything other tests left queued
+        mailbox.failFor(failing);
+        try {
+            Instant due = clock.instant().plus(Duration.ofHours(1));
+            queue(failingId, due);
+            queue(workingId, due.plusSeconds(1));
+            clock.advance(Duration.ofHours(2));
+            emails.sendDue();
+            assertThat(awaitAttempt(failingId, 1).get("attempts")).isEqualTo(1);
+            assertThat(queued(workingId)).as("the run stopped at the failure instead of trying the rest").isOne();
+            emails.sendDue();
+            assertThat(queued(workingId)).as("the next run sends the rest").isZero();
+            assertThat(mailbox.await(working, "password was changed")).isNotNull();
+        } finally {
+            mailbox.recover(failing);
+            jdbc.update("DELETE FROM email_outbox WHERE account_id = CAST(? AS uuid)", failingId);
+        }
+    }
+
+    private void queue(String accountId, Instant due) {
+        OffsetDateTime at = OffsetDateTime.ofInstant(due, ZoneOffset.UTC);
+        jdbc.update("""
+                INSERT INTO email_outbox (id, kind, account_id, created_at, next_attempt_at)
+                VALUES (?, 'PASSWORD_CHANGED', CAST(? AS uuid), ?, ?)
+                """, UUID.randomUUID(), accountId, at, at);
     }
 
     private Map<String, Object> awaitAttempt(String accountId, int attempts) {

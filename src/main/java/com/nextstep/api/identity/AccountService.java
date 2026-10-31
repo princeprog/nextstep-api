@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.nextstep.api.common.ApiException;
 import com.nextstep.api.common.JsonInput;
+import com.nextstep.api.common.RateLimiter;
 import com.nextstep.api.common.Validators;
 import com.nextstep.api.identity.AccountEmails.Kind;
 import com.nextstep.api.identity.AccountTokens.Purpose;
@@ -24,6 +25,9 @@ import com.nextstep.api.identity.AccountTokens.Purpose;
 public class AccountService {
 
     private static final Logger log = LoggerFactory.getLogger(AccountService.class);
+
+    /** The rate-limit bucket for failed sign-ins per email (see AuthController). */
+    static final String LOGIN_EMAIL_BUCKET = "login-email";
 
     /** Registration fields after validation. */
     public record Registration(String displayName, String email, String password, ZoneId zone) {
@@ -36,11 +40,12 @@ public class AccountService {
     private final AccountTokens tokens;
     private final AccountEmails emails;
     private final DeletionLedger ledger;
+    private final RateLimiter rateLimiter;
     private final Clock clock;
 
     public AccountService(AccountRepository accounts, PasswordEncoder passwordEncoder, PasswordPolicy passwordPolicy,
                           SessionSupport sessions, AccountTokens tokens, AccountEmails emails, DeletionLedger ledger,
-                          Clock clock) {
+                          RateLimiter rateLimiter, Clock clock) {
         this.accounts = accounts;
         this.passwordEncoder = passwordEncoder;
         this.passwordPolicy = passwordPolicy;
@@ -48,6 +53,7 @@ public class AccountService {
         this.tokens = tokens;
         this.emails = emails;
         this.ledger = ledger;
+        this.rateLimiter = rateLimiter;
         this.clock = clock;
     }
 
@@ -62,9 +68,11 @@ public class AccountService {
     }
 
     /**
-     * Creates an unverified account and queues its confirmation link. When the email already has an account, that
-     * account doesn't change: its owner gets an "account already exists" email, or a fresh link while still unverified.
-     * Both paths hash the password and answer the same way, so registration doesn't reveal which emails have accounts.
+     * Creates an unverified account and queues its confirmation link. A confirmed account doesn't change: its owner gets
+     * an "account already exists" email. An account that is still unconfirmed takes the newest registration's name,
+     * password, and time zone, and gets a fresh link; older links stop working once it is sent. Unconfirmed accounts
+     * can't sign in, so nobody holds a session for one. Every path hashes the password and answers the same way, so
+     * registration doesn't reveal which emails have accounts.
      */
     @Transactional
     public void register(Registration registration) {
@@ -72,7 +80,15 @@ public class AccountService {
         Optional<Account> existing = accounts.findByEmailAndKind(registration.email(), AccountKind.NORMAL);
         if (existing.isPresent()) {
             Account account = existing.get();
-            emails.enqueue(account.getEmailVerifiedAt() == null ? Kind.VERIFY_EMAIL : Kind.ACCOUNT_EXISTS, account.getId());
+            if (account.getEmailVerifiedAt() != null) {
+                emails.enqueue(Kind.ACCOUNT_EXISTS, account.getId());
+                return;
+            }
+            account.setDisplayName(registration.displayName());
+            account.setPasswordHash(passwordHash);
+            account.setTimeZone(registration.zone().getId());
+            account.setUpdatedAt(clock.instant());
+            emails.enqueue(Kind.VERIFY_EMAIL, account.getId());
             return;
         }
         Instant now = clock.instant();
@@ -114,9 +130,16 @@ public class AccountService {
                 .ifPresent(account -> emails.enqueue(Kind.RESET_PASSWORD, account.getId()));
     }
 
+    /** True when a reset link could be used now; checked before the new password so a dead link is reported first. */
+    @Transactional(readOnly = true)
+    public boolean isUsableResetLink(String token) {
+        return tokens.isUsable(token, Purpose.RESET_PASSWORD);
+    }
+
     /**
      * Sets a new password from a reset link and signs the account out everywhere. Completing a reset proves control of
-     * the inbox, so it also verifies the email.
+     * the inbox, so it also verifies the email, and it clears the email's failed sign-ins so the owner isn't kept out by
+     * someone else's guesses.
      */
     @Transactional
     public void resetPassword(String token, String newPassword) {
@@ -129,8 +152,10 @@ public class AccountService {
         }
         account.setUpdatedAt(now);
         tokens.revokeUnused(accountId, Purpose.RESET_PASSWORD);
+        tokens.revokeUnused(accountId, Purpose.VERIFY_EMAIL);
         sessions.deleteAllSessions(accountId);
         emails.enqueue(Kind.PASSWORD_CHANGED, accountId);
+        rateLimiter.clear(LOGIN_EMAIL_BUCKET, account.getEmail());
     }
 
     /** Changes the password and signs out every other session. Returns false, changing nothing, if the current password is wrong. */

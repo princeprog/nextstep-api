@@ -69,6 +69,10 @@ public class InterviewService {
         if (owner.isDemo() && interviews.countByOwnerId(owner.id()) >= properties.getDemo().getMaxInterviews()) {
             throw ApiException.conflict("DEMO_LIMIT_REACHED", "This demo has reached its interview limit.");
         }
+        if (!owner.isDemo() && interviews.countByOwnerId(owner.id()) >= properties.getAccounts().getMaxInterviews()) {
+            throw ApiException.conflict("ACCOUNT_LIMIT_REACHED", "This account has reached its limit of "
+                    + properties.getAccounts().getMaxInterviews() + " interviews. Delete some to add more.");
+        }
         Interview interview = new Interview();
         interview.setOwnerId(owner.id());
         interview.setApplicationId(applicationId);

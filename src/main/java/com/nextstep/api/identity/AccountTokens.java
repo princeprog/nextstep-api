@@ -21,13 +21,18 @@ import org.springframework.stereotype.Component;
 
 /**
  * Single-use, expiring tokens for email links. A token is 32 random bytes; only its SHA-256 hash is stored, so a copy of
- * the database can't be used to verify an email or reset a password. Issuing a token replaces any unused token of the
- * same purpose, so only the newest link works.
+ * the database can't be used to verify an email or reset a password. Once the email carrying a new token is sent, older
+ * unused tokens of the same purpose stop working ({@link #retireOthers}), so only the newest delivered link works and a
+ * failed send never breaks the link already in the inbox.
  */
 @Component
 public class AccountTokens {
 
     public enum Purpose { VERIFY_EMAIL, RESET_PASSWORD }
+
+    /** A new token: its raw value for the link, and its row ID. */
+    public record Issued(String token, UUID id) {
+    }
 
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final Pattern FORMAT = Pattern.compile("^[A-Za-z0-9_-]{43}$");
@@ -40,18 +45,42 @@ public class AccountTokens {
         this.clock = clock;
     }
 
-    /** Creates a token and returns its raw value for the link. Any older unused token of this purpose stops working. */
-    public String issue(UUID accountId, Purpose purpose, Duration ttl) {
+    /** Creates a token. Older tokens keep working until {@link #retireOthers} runs after the email is sent. */
+    public Issued issue(UUID accountId, Purpose purpose, Duration ttl) {
         byte[] bytes = new byte[32];
         RANDOM.nextBytes(bytes);
         String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
         Instant now = clock.instant();
-        revokeUnused(accountId, purpose);
+        UUID id = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO account_tokens (id, account_id, purpose, token_hash, created_at, expires_at)
                 VALUES (?, ?, ?, ?, ?, ?)
-                """, UUID.randomUUID(), accountId, purpose.name(), hash(token), utc(now), utc(now.plus(ttl)));
-        return token;
+                """, id, accountId, purpose.name(), hash(token), utc(now), utc(now.plus(ttl)));
+        return new Issued(token, id);
+    }
+
+    /** After the email with the token {@code keep} was sent: every other unused token of that purpose stops working. */
+    public void retireOthers(UUID accountId, Purpose purpose, UUID keep) {
+        jdbc.update("DELETE FROM account_tokens WHERE account_id = ? AND purpose = ? AND used_at IS NULL AND id <> ?",
+                accountId, purpose.name(), keep);
+    }
+
+    /** Removes a token whose email couldn't be sent. */
+    public void discard(UUID id) {
+        jdbc.update("DELETE FROM account_tokens WHERE id = ?", id);
+    }
+
+    /** True when the token could be used now, without using it. */
+    public boolean isUsable(String token, Purpose purpose) {
+        if (token == null || !FORMAT.matcher(token).matches()) {
+            return false;
+        }
+        OffsetDateTime now = utc(clock.instant());
+        Integer count = jdbc.queryForObject("""
+                SELECT count(*) FROM account_tokens
+                WHERE token_hash = ? AND purpose = ? AND used_at IS NULL AND expires_at > ?
+                """, Integer.class, hash(token), purpose.name(), now);
+        return count != null && count > 0;
     }
 
     /** Marks a valid token used and returns its account. Unknown, used, expired, or wrong-purpose tokens return empty. */

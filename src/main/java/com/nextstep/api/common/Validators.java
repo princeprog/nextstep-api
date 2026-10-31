@@ -17,7 +17,13 @@ public final class Validators {
 
     public static final String CONTROL_MESSAGE = "Remove unsupported control characters.";
     private static final String SINGLE_LINE_MESSAGE = "Use a single line.";
-    private static final Pattern EMAIL = Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
+    /**
+     * A bare address in the form browsers accept for type="email" (the WHATWG rule), with at least one dot in the
+     * domain. Names, comments, quotes, and angle brackets are refused, so an address can't carry extra text into an
+     * email's To header, and one inbox can't hide behind several spellings.
+     */
+    private static final Pattern EMAIL = Pattern.compile("^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+"
+            + "@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$");
     private static final Pattern DATE = Pattern.compile("^\\d{4}-\\d{2}-\\d{2}$");
     private static final Pattern TIME = Pattern.compile("^\\d{2}:\\d{2}$");
     private static final Set<String> ZONES = ZoneId.getAvailableZoneIds();
@@ -104,7 +110,11 @@ public final class Validators {
     }
 
     public static boolean isEmail(String value) {
-        return value != null && value.length() <= 254 && EMAIL.matcher(value).matches();
+        if (value == null || value.length() > 254 || !EMAIL.matcher(value).matches()) {
+            return false;
+        }
+        String local = value.substring(0, value.indexOf('@'));
+        return local.length() <= 64 && !local.startsWith(".") && !local.endsWith(".") && !local.contains("..");
     }
 
     public static String optionalEmail(JsonInput in, String field) {

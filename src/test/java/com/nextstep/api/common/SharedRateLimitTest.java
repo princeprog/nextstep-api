@@ -4,6 +4,11 @@ import static com.nextstep.api.support.TestBrowser.map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -13,6 +18,7 @@ import org.springframework.context.ConfigurableApplicationContext;
 import com.nextstep.api.NextstepApiApplication;
 import com.nextstep.api.support.IntegrationTestSupport;
 import com.nextstep.api.support.TestBrowser;
+import com.nextstep.api.support.TestMailbox;
 import com.nextstep.api.support.TestPostgres;
 
 class SharedRateLimitTest extends IntegrationTestSupport {
@@ -42,16 +48,94 @@ class SharedRateLimitTest extends IntegrationTestSupport {
     }
 
     @Test
-    void onlyFailedSignInsCountAgainstAnEmail() {
+    void onlyFailedSignInsCountAgainstAnEmailAndAResetClearsThem() {
         String email = uniqueEmail();
         registerVerified(email, PASSWORD, "UTC");
+        int original = properties.getRateLimit().getLoginFailuresPerEmailPerWindow();
+        properties.getRateLimit().setLoginFailuresPerEmailPerWindow(4);
+        try {
+            for (int i = 0; i < 6; i++) {
+                assertThat(signInStatus(email, PASSWORD)).as("successful sign-in %d", i + 1).isEqualTo(200);
+            }
+            for (int i = 0; i < 4; i++) {
+                assertThat(signInStatus(email, "not-the-password")).isEqualTo(401);
+            }
+            assertThat(signInStatus(email, PASSWORD)).as("the email's failure allowance is used up").isEqualTo(429);
+
+            TestBrowser owner = browser();
+            owner.refreshCsrf();
+            owner.post("/api/v1/auth/password-reset", map("email", email));
+            String token = TestMailbox.token(mailbox.await(email, "Reset your NextStep password"));
+            assertThat(owner.post("/api/v1/auth/password-reset/confirm", map("token", token, "password",
+                    "a-new-strong-passphrase")).status()).isEqualTo(204);
+            assertThat(signInStatus(email, "a-new-strong-passphrase")).as("a reset clears the failures").isEqualTo(200);
+        } finally {
+            properties.getRateLimit().setLoginFailuresPerEmailPerWindow(original);
+        }
+    }
+
+    @Test
+    void successfulSignInsDoNotUseUpAnAddressAllowance() {
+        String email = uniqueEmail();
+        registerVerified(email, PASSWORD, "UTC");
+        String sharedAddress = "198.51.100.91";
         for (int i = 0; i < 12; i++) {
-            assertThat(signInStatus(email, PASSWORD)).as("successful sign-in %d", i + 1).isEqualTo(200);
+            TestBrowser device = new TestBrowser(port, objectMapper, sharedAddress);
+            device.refreshCsrf();
+            assertThat(device.post("/api/v1/auth/login", map("email", email, "password", PASSWORD)).status())
+                    .as("sign-in %d from an office network", i + 1).isEqualTo(200);
         }
-        for (int i = 0; i < 10; i++) {
-            assertThat(signInStatus(email, "not-the-password")).isEqualTo(401);
+    }
+
+    @Test
+    void simultaneousFailedSignInsCannotPassTheAddressLimit() throws Exception {
+        String address = "198.51.100.92";
+        List<TestBrowser> devices = new ArrayList<>();
+        for (int i = 0; i < 16; i++) {
+            TestBrowser device = new TestBrowser(port, objectMapper, address);
+            device.refreshCsrf();
+            devices.add(device);
         }
-        assertThat(signInStatus(email, PASSWORD)).as("ten failures lock the email for the window").isEqualTo(429);
+        ExecutorService pool = Executors.newFixedThreadPool(devices.size());
+        try {
+            List<Future<Integer>> results = new ArrayList<>();
+            for (TestBrowser device : devices) {
+                results.add(pool.submit(() -> device.post("/api/v1/auth/login",
+                        map("email", uniqueEmail(), "password", "not-the-password")).status()));
+            }
+            int failures = 0;
+            for (Future<Integer> result : results) {
+                int status = result.get();
+                assertThat(status).isIn(401, 429);
+                if (status == 401) {
+                    failures++;
+                }
+            }
+            assertThat(failures).as("each attempt is counted before the password check").isLessThanOrEqualTo(10);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void requestsThatQueueEmailShareAnHourlyCap() {
+        int original = properties.getMail().getGlobalPerHour();
+        clock.set(Instant.parse("2032-02-01T10:00:00Z"));
+        properties.getMail().setGlobalPerHour(3);
+        try {
+            for (int i = 0; i < 3; i++) {
+                TestBrowser visitor = browser();
+                visitor.refreshCsrf();
+                assertThat(visitor.post("/api/v1/auth/password-reset", map("email", uniqueEmail())).status()).isEqualTo(202);
+            }
+            TestBrowser fourth = browser();
+            fourth.refreshCsrf();
+            TestBrowser.Response blocked = fourth.post("/api/v1/auth/password-reset", map("email", uniqueEmail()));
+            assertThat(blocked.status()).as("a new address and email still hit the shared cap").isEqualTo(429);
+            assertThat(blocked.code()).isEqualTo("RATE_LIMITED");
+        } finally {
+            properties.getMail().setGlobalPerHour(original);
+        }
     }
 
     @Test

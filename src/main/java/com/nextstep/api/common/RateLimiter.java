@@ -53,7 +53,10 @@ public class RateLimiter {
         this.hasher = hasher;
     }
 
-    /** Counts this request and rejects it when the bucket is over its limit. */
+    /**
+     * Counts this request and rejects it when the bucket is over its limit. Counting comes first, so simultaneous
+     * requests can't all pass before any of them is recorded.
+     */
     public void check(String bucket, String key, int max, Duration window) {
         if (hit(bucket, key, window) > max) {
             throw limited();
@@ -74,6 +77,18 @@ public class RateLimiter {
     /** Counts a hit without checking the limit, for example a failed sign-in. */
     public void record(String bucket, String key, Duration window) {
         hit(bucket, key, window);
+    }
+
+    /** Takes back one hit counted by {@link #check}, for example after a successful sign-in. */
+    public void refund(String bucket, String key, Duration window) {
+        Window w = Window.at(clock.instant(), window);
+        jdbc.update("UPDATE rate_limit_counters SET hits = hits - 1 WHERE bucket = ? AND key_hash = ? AND window_start = ? AND hits > 0",
+                bucket, hasher.hash(bucket, key), w.start());
+    }
+
+    /** Forgets every hit for a key, for example an email's failed sign-ins after its owner resets the password. */
+    public void clear(String bucket, String key) {
+        jdbc.update("DELETE FROM rate_limit_counters WHERE bucket = ? AND key_hash = ?", bucket, hasher.hash(bucket, key));
     }
 
     public int deleteExpired() {

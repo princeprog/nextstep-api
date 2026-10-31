@@ -13,7 +13,11 @@ import org.springframework.stereotype.Component;
 
 import com.nextstep.api.common.Validators;
 
-/** Verifies email and password for normal accounts. Unknown emails take the same hashing path as wrong passwords. */
+/**
+ * Verifies email and password for normal accounts. Unknown emails take the same hashing path as wrong passwords, and an
+ * account whose email isn't confirmed yet gets the same answer as a wrong password. Otherwise registering an address and
+ * then signing in with the chosen password would reveal whether the address already had an account.
+ */
 @Component
 public class AccountAuthenticationProvider implements AuthenticationProvider {
 
@@ -36,7 +40,8 @@ public class AccountAuthenticationProvider implements AuthenticationProvider {
             passwordEncoder.matches(password, dummyHash());
             throw new BadCredentialsException("Invalid credentials");
         }
-        if (!passwordEncoder.matches(password, account.get().getPasswordHash())) {
+        boolean matches = passwordEncoder.matches(password, account.get().getPasswordHash());
+        if (!matches || account.get().getEmailVerifiedAt() == null) {
             throw new BadCredentialsException("Invalid credentials");
         }
         return UsernamePasswordAuthenticationToken.authenticated(

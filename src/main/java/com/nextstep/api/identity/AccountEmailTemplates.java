@@ -50,7 +50,7 @@ final class AccountEmailTemplates {
         return message(to, "Your NextStep account was deleted",
                 "Your NextStep account and everything in it were deleted, and every session was signed out.",
                 null, null,
-                "Copies may remain in encrypted backups until they expire; if a backup is ever restored, the deletion is "
+                "Copies may remain in backups until they expire; if a backup is ever restored, the deletion is "
                         + "applied again. This is the last email you'll get from NextStep.");
     }
 

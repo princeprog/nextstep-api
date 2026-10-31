@@ -75,6 +75,7 @@ public class AuthController {
         rateLimiter.check("register", ClientAddress.of(request), limits.getRegisterPerHour(), HOUR);
         AccountService.Registration registration = accountService.validateRegistration(JsonInput.of(body));
         rateLimiter.check("register-email", registration.email(), limits.getRegisterPerEmailPerHour(), HOUR);
+        limitEmailIntake();
         try {
             accountService.register(registration);
         } catch (DataIntegrityViolationException concurrentRegistration) {
@@ -99,17 +100,22 @@ public class AuthController {
         }
         in.errors().throwIfAny();
         var limits = properties.getRateLimit();
-        rateLimiter.check("login-ip", ClientAddress.of(request), limits.getLoginPerWindow(), limits.getLoginWindow());
-        // Only failed attempts count against an email, so the owner's own sign-ins never use up its limit.
-        rateLimiter.requireCapacity("login-email", email, limits.getLoginPerWindow(), limits.getLoginWindow());
+        String client = ClientAddress.of(request);
+        Duration window = limits.getLoginWindow();
+        // Every attempt is counted before the password is checked, so simultaneous requests can't slip past a limit.
+        // A successful sign-in takes its counts back: only failures use up an address's or an email's allowance, and
+        // the email allowance is much larger, so one attacker can't lock the owner out.
+        rateLimiter.check("login-ip", client, limits.getLoginPerWindow(), window);
+        rateLimiter.check(AccountService.LOGIN_EMAIL_BUCKET, email, limits.getLoginFailuresPerEmailPerWindow(), window);
         AccountPrincipal principal;
         try {
             var result = authenticationManager.authenticate(UsernamePasswordAuthenticationToken.unauthenticated(email, password));
             principal = (AccountPrincipal) result.getPrincipal();
         } catch (AuthenticationException ex) {
-            rateLimiter.record("login-email", email, limits.getLoginWindow());
             throw new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "Email or password is incorrect.", null);
         }
+        rateLimiter.refund("login-ip", client, window);
+        rateLimiter.refund(AccountService.LOGIN_EMAIL_BUCKET, email, window);
         sessions.signIn(request, response, principal);
         Account account = accounts.findById(principal.id()).orElseThrow();
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(MeResponse.of(account));
@@ -170,6 +176,9 @@ public class AuthController {
         limitLinkAttempts(request);
         JsonInput in = JsonInput.of(body);
         String token = in.string("token");
+        if (!in.errors().has("token") && !accountService.isUsableResetLink(token)) {
+            throw AccountService.invalidLink();
+        }
         String password = passwordPolicy.check(in, "password", "Enter a new password.");
         in.errors().throwIfAny();
         accountService.resetPassword(token, password);
@@ -191,7 +200,17 @@ public class AuthController {
         in.errors().throwIfAny();
         // Limits apply to any address, registered or not, so they reveal nothing and stop email bombing.
         rateLimiter.check(perEmailBucket, email, limits.getEmailRequestsPerEmailPerHour(), HOUR);
+        limitEmailIntake();
         return email;
+    }
+
+    /**
+     * Requests that can queue an email share one hourly cap, equal to the sending cap. Without it, requests from many
+     * addresses could queue mail faster than it is sent and delay everyone's links for hours. The cap applies whether
+     * or not an email ends up queued, so a refusal says nothing about any account.
+     */
+    private void limitEmailIntake() {
+        rateLimiter.check("email-intake", "all", properties.getMail().getGlobalPerHour(), HOUR);
     }
 
     private static ResponseEntity<Map<String, String>> accepted() {

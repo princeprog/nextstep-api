@@ -4,6 +4,7 @@ import static com.nextstep.api.support.TestBrowser.map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -69,7 +70,11 @@ public abstract class IntegrationTestSupport {
         registry.add("spring.datasource.password", postgres::password);
         registry.add("server.address", () -> "127.0.0.1");
         registry.add("nextstep.security.identifier-key", () -> TEST_IDENTIFIER_KEY);
-        registry.add("nextstep.mail.global-per-hour", () -> "1000000");
+        // The highest hourly email limit the production check allows, so the production-profile tests can start too.
+        registry.add("nextstep.mail.global-per-hour", () -> "10000");
+        // Tests send queued email themselves (sendDue) or right after a request commits; the background retry would
+        // only race with them.
+        registry.add("nextstep.mail.poll-interval", () -> "PT1H");
     }
 
     @LocalServerPort
@@ -134,6 +139,36 @@ public abstract class IntegrationTestSupport {
         assertThat(response.status()).as(response.body()).isEqualTo(200);
         browser.refreshCsrf();
         return browser;
+    }
+
+    /** One sign-in attempt from a fresh browser and address; returns the response whatever it is. */
+    protected Response loginAttempt(String email, String password) {
+        TestBrowser browser = browser();
+        browser.refreshCsrf();
+        return browser.post("/api/v1/auth/login", map("email", email, "password", password));
+    }
+
+    /**
+     * Waits until nothing is queued for the account any more. An email arrives in the mailbox just before its batch
+     * commits, so a test that checks what happens after sending (older links retired) waits for this first.
+     */
+    protected void awaitOutboxEmpty(String email) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        while (System.nanoTime() < deadline) {
+            Integer queued = jdbc.queryForObject("""
+                    SELECT count(*) FROM email_outbox o JOIN accounts a ON a.id = o.account_id WHERE a.email = ?
+                    """, Integer.class, email);
+            if (queued != null && queued == 0) {
+                return;
+            }
+            try {
+                Thread.sleep(20);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(ex);
+            }
+        }
+        throw new AssertionError("Emails for " + email + " are still queued");
     }
 
     /** Registers, verifies, and signs in a new normal account. */

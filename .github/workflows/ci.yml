@@ -25,12 +25,21 @@ jobs:
           cache: maven
       # The integration tests start their own disposable PostgreSQL cluster from these binaries (see TestPostgres).
       - name: Install PostgreSQL 18 binaries
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-common
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y postgresql-18
-          echo "NEXTSTEP_PG_BIN=/usr/lib/postgresql/18/bin" >> "$GITHUB_ENV"
+          # A package mirror can stall; give each attempt a deadline and try up to three times.
+          for attempt in 1 2 3; do
+            if timeout 120 sudo apt-get update \
+              && timeout 300 sudo apt-get install -y postgresql-common \
+              && timeout 180 sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y \
+              && timeout 300 sudo apt-get install -y postgresql-18; then
+              echo "NEXTSTEP_PG_BIN=/usr/lib/postgresql/18/bin" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "::warning::Installing PostgreSQL failed or stalled (attempt $attempt of 3)"
+            sleep 15
+          done
+          exit 1
       - name: Build and run every test
         run: ./mvnw -B verify
       - name: Keep test reports

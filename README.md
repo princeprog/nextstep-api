@@ -250,6 +250,14 @@ gitleaks git . --redact
 - Take a backup first and run the migration against a restored copy. Pending migrations apply when the API starts;
   Flyway's lock makes concurrent instances wait for the first one. Recover from a bad migration by shipping a new forward
   migration, or by restoring the backup.
+- Rehearse the release on the restored copy: point a staging API (nextstep-app's `scripts\staging.ps1`, or the container
+  image) at it, let Flyway apply the migration, and run the checks for the release.
+- When a release changes behavior that older instances would get wrong, it can't run alongside them, so stop the old
+  instances before the first new one starts, accepting a short outage. V3 is such a release: an instance from before V3
+  would let unconfirmed accounts in and create accounts that never get a confirmation link. Say so in the commit message
+  and the release notes whenever a migration needs this.
+- To run migrations as a separate release step instead of at startup, run one instance with `FLYWAY_ENABLED=true` as
+  a one-off job, then start the regular instances with `FLYWAY_ENABLED=false`.
 
 ## Operations runbooks
 

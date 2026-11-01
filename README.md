@@ -46,6 +46,8 @@ temporary demo workspace. Data is stored in PostgreSQL.
 The development cluster never touches other PostgreSQL services on the machine. `run-api.ps1 -RelaxedLimits` raises the
 demo, registration, and login rate limits for local end-to-end test runs; never use it for a shared deployment (the
 production profile refuses to start with those values).
+By default the API writes emails to its log; `-Mailpit` sends them to a local Mailpit inbox, and `-Gmail` to real inboxes
+through your own Gmail account (see [Real email through Gmail](#real-email-through-gmail-local-testing-only)).
 
 ## Configuration
 
@@ -142,9 +144,42 @@ setting, never its value.
   outbox never holds a usable token. Emails never contain text a user typed.
 - **Record caps**: a normal account holds at most 2,000 applications, 10,000 tasks, and 2,000 interviews (settings above),
   which also bounds the size of its export.
-- **Locally**, `MAIL_MODE=log` prints each email and its link to the API log. To receive real SMTP mail locally, run
-  [Mailpit](https://mailpit.axllent.org/) (`mailpit --listen 127.0.0.1:8025 --smtp 127.0.0.1:1025`) and start the API with
-  `.\scripts\run-api.ps1 -Mailpit`; the inbox is at http://127.0.0.1:8025.
+- **Locally**, `MAIL_MODE=log` prints each email and its link to the API log, and no email leaves the computer. To receive
+  the emails in a web inbox, run [Mailpit](https://mailpit.axllent.org/) (`mailpit --listen 127.0.0.1:8025 --smtp 127.0.0.1:1025`)
+  and start the API with `.\scripts\run-api.ps1 -Mailpit`; the inbox is at http://127.0.0.1:8025. Start the web app with
+  `LOCAL_INBOX_URL=http://127.0.0.1:8025`, and its screens that say an email was sent point to that inbox (see the
+  nextstep-app README). To get the emails in real inboxes, use `-Gmail` instead (next section).
+
+### Real email through Gmail (local testing only)
+
+`.\scripts\run-api.ps1 -Gmail` sends the emails to real inboxes through your own Gmail account, so you can see them where
+people will read them. It's for testing on this computer only; production will use the email provider that is still to be
+chosen.
+
+1. Turn on 2-Step Verification for the Google account, then create an app password at
+   https://myaccount.google.com/apppasswords. Google offers app passwords only once 2-Step Verification is on, and shows
+   the password once, as 16 letters.
+2. Run `.\scripts\set-gmail-app-password.ps1` and enter the Gmail address and the app password (masked as you type). It
+   saves them to `%LOCALAPPDATA%\NextStep\gmail-smtp.json`, outside the repository, with the app password encrypted by
+   Windows DPAPI for your Windows account, so it is never shown, logged, or written in plain text. Run it again to
+   replace them.
+3. Start the API with `.\scripts\run-api.ps1 -Gmail`. For that run it sets `MAIL_MODE=smtp`, `MAIL_HOST=smtp.gmail.com`,
+   `MAIL_PORT=587`, `MAIL_SMTP_AUTH=true`, `MAIL_STARTTLS=true`, `MAIL_USERNAME` and `MAIL_PASSWORD` from the saved file,
+   and `MAIL_FROM=NextStep <your address>`, and it clears them again when the API stops. It refuses to run together with
+   `-Mailpit`, and stops with a pointer to the setup script when nothing is saved yet.
+
+Keep in mind:
+
+- The messages come from your own Gmail account. Recipients see your address, copies land in your Sent folder, and they
+  count toward Gmail's sending limits.
+- The links in them point at the app on this computer (`APP_PUBLIC_ORIGIN`, `http://localhost:3000` by default), so open
+  them on this computer. On a phone or another computer, they won't load.
+- Don't run the end-to-end tests with `-Gmail`. They read their emails from Mailpit, and they would send dozens of emails
+  from your account to made-up `@example.com` addresses.
+- If an email doesn't arrive, look in the API log for `Sending a … email failed`. `MailAuthenticationException` there
+  means Gmail refused the address or the app password; save them again.
+- To stop using it, delete `%LOCALAPPDATA%\NextStep\gmail-smtp.json` and revoke the app password at
+  https://myaccount.google.com/apppasswords.
 
 ### Health checks
 
@@ -333,7 +368,7 @@ src/main/java/com/nextstep/api/
 src/main/resources/db/migration/   Flyway migrations (schema, Spring Session tables, rate-limit counters, link tokens,
                                    email outbox, deletion records)
 openapi/openapi.yaml               published contract
-scripts/                           local database, run, and backup scripts
+scripts/                           local database, run, Gmail app password, and backup scripts
 .github/                           CI, security scanning, Dependabot
 ```
 

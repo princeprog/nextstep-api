@@ -88,5 +88,6 @@ runs the dependency and secret scans described in the README.
 ## Don'ts
 
 - No production deployment, external services, or real personal data without an explicit request from the owner.
+  That includes `run-api.ps1 -Gmail`, which sends real email from the owner's Gmail account; use the log or `-Mailpit`.
 - Don't claim production readiness: hosting, the email provider, retention, and the final privacy policy are still open
   decisions.

@@ -4,6 +4,7 @@ $script:NextStepRoot = Join-Path $env:LOCALAPPDATA 'NextStep'
 $script:NextStepDataDir = Join-Path $script:NextStepRoot 'pgdata-dev'
 $script:NextStepLogFile = Join-Path $script:NextStepRoot 'postgres-dev.log'
 $script:NextStepSecretFile = Join-Path $script:NextStepRoot 'dev-db.json'
+$script:NextStepGmailFile = Join-Path $script:NextStepRoot 'gmail-smtp.json'
 $script:NextStepDbPort = if ($env:NEXTSTEP_DB_PORT) { [int]$env:NEXTSTEP_DB_PORT } else { 55432 }
 
 function Get-NextStepPgBin {
@@ -30,6 +31,42 @@ function Get-NextStepSecrets {
         throw 'Development database is not initialized. Run: .\scripts\db-dev.ps1 init'
     }
     return Get-Content -LiteralPath $script:NextStepSecretFile -Raw | ConvertFrom-Json
+}
+
+# The Gmail account that run-api.ps1 -Gmail sends email through, saved by set-gmail-app-password.ps1. The app password
+# is encrypted with Windows DPAPI for the current user (ConvertFrom-SecureString without a key), so only this Windows
+# account on this computer can decrypt it, and it is never written in plain text.
+function Save-NextStepGmailSmtp {
+    param(
+        [Parameter(Mandatory = $true)][string]$Address,
+        [Parameter(Mandatory = $true)][System.Security.SecureString]$AppPassword,
+        [string]$Path = $script:NextStepGmailFile
+    )
+    $folder = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $folder)) { New-Item -ItemType Directory -Force -Path $folder | Out-Null }
+    $saved = [ordered]@{ address = $Address; appPassword = (ConvertFrom-SecureString -SecureString $AppPassword) }
+    $saved | ConvertTo-Json | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
+# Returns the saved Gmail address and the decrypted app password. Only for handing them to the API; never print them.
+function Get-NextStepGmailSmtp {
+    param([string]$Path = $script:NextStepGmailFile)
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw 'No Gmail app password is saved. Run .\scripts\set-gmail-app-password.ps1 first, then start the API with -Gmail again.'
+    }
+    try {
+        $saved = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $secure = ConvertTo-SecureString -String $saved.appPassword -ErrorAction Stop
+    } catch {
+        $saved = $null
+    }
+    if (-not $saved -or -not $saved.address) {
+        throw "The saved Gmail app password in $Path can't be read. It was saved by another Windows user or on another computer, or the file is damaged. Run .\scripts\set-gmail-app-password.ps1 again."
+    }
+    return [pscustomobject]@{
+        Address  = $saved.address
+        Password = (New-Object System.Net.NetworkCredential -ArgumentList '', $secure).Password
+    }
 }
 
 function New-NextStepSecret {

@@ -71,7 +71,9 @@ function Get-NextStepGmailSmtp {
 
 function New-NextStepSecret {
     $bytes = New-Object byte[] 24
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    # RandomNumberGenerator.Fill exists only in PowerShell 7 (.NET Core); Create().GetBytes also works in Windows PowerShell 5.1.
+    $generator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $generator.GetBytes($bytes) } finally { $generator.Dispose() }
     return ([System.BitConverter]::ToString($bytes) -replace '-', '').ToLowerInvariant()
 }
 

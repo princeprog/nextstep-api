@@ -79,7 +79,7 @@
 			<!-- Required by Spring Security's Argon2PasswordEncoder -->
 			<groupId>org.bouncycastle</groupId>
 			<artifactId>bcprov-jdk18on</artifactId>
-			<version>1.86</version>
+			<version>1.87</version>
 		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
